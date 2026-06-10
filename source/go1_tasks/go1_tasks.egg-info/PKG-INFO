@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: go1-tasks
+Version: 0.1
+Summary: Custom Go1 Point-to-Point tasks.
+Author: Theeraphong
+Requires-Dist: isaaclab
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: summary

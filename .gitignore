@@ -1,0 +1,6 @@
+.env_isaac2_3_0/
+logs/
+outputs/
+*.pt
+*.pth
+__pycache__/
