@@ -14,6 +14,8 @@ from isaaclab.app import AppLauncher
 import numpy as np
 # local imports
 import cli_args  # isort: skip
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend — works headless, no display needed
 import matplotlib.pyplot as plt
 import math
 
@@ -40,6 +42,12 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--max_steps", type=int, default=None, help="Total steps to run before auto-exiting (default: video_length+50 if --video, else 100000).")
+parser.add_argument(
+    "--plot_mode", type=str, default="save", choices=["save", "live", "both"],
+    help="How to output the per-episode error plot: 'save' writes PNG files (default, headless-safe), "
+         "'live' shows an interactive updating window instead, 'both' does both."
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -47,6 +55,9 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
+print(f"[DEBUG] hydra_args = {hydra_args}")
+print(f"[DEBUG] full sys.argv = {sys.argv}")
+
 if args_cli.video:
     args_cli.enable_cameras = True
 
@@ -56,6 +67,12 @@ sys.argv = [sys.argv[0]] + hydra_args
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+# AppLauncher's --anim_recording_enabled path enables the omni.physx.pvd
+# extension via Kit's own "--enable <ext>" convention, and leaves that
+# mutated sys.argv behind — which then corrupts Hydra's parsing later.
+# Restore the clean args here, after AppLauncher is done with them.
+sys.argv = [sys.argv[0]] + hydra_args
 
 # =========================================================
 # PASTE THE IMPORTS HERE (After simulation_app boots!)
@@ -90,9 +107,11 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, export_po
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
-import go1_tasks.manager_based.locomotion.move_p2p
-import go1_tasks.manager_based.locomotion.velocity
-
+# import go1_tasks.manager_based.locomotion.move_p2p
+# import go1_tasks.manager_based.locomotion.velocity
+# import go1_tasks.manager_based.locomotion.move_p2p_rel_time
+import go1_tasks
+import mc_tasks
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -124,6 +143,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    env_cfg.viewer.origin_type = "asset_root"
+    # env_cfg.viewer.origin_type = "world"
+    env_cfg.viewer.asset_name = "robot"
+    env_cfg.viewer.eye = (1.0, 0.0, -0.05)      # close, and near LEG height (not overhead)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.05)   # look roughly at leg-height, not the body center
+
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -207,22 +233,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obs = env.get_observations()
     timestep = 0
 
+    # ==========================================================
+    # AUTO-EXIT: guarantees the loop terminates and reaches
+    # env.close() cleanly, instead of relying on Ctrl-C (which
+    # can cut off RecordVideo before it finalizes the clip).
+    # ==========================================================
+    if args_cli.max_steps is not None:
+        max_steps = args_cli.max_steps
+    elif args_cli.video:
+        max_steps = args_cli.video_length + 50  # small buffer past the recorded clip
+    else:
+        max_steps = 100000
+    print(f"[INFO]: Will auto-exit after {max_steps} steps.")
 
     print("[INFO]: Setup complete. Starting playback...")
-        
+
     # ==========================================================
     # SETUP COORDINATE FRAME MARKER
     # ==========================================================
     frame_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TargetFrame")
     # Scale it down so it is the same size as the robot, not massive
-    frame_cfg.markers["frame"].scale = (0.2, 0.2, 0.2) 
+    frame_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
     target_frame_marker = VisualizationMarkers(frame_cfg)
     # ==========================================================
 
-
-    # Simulate environment
-    target_frame_marker = VisualizationMarkers(frame_cfg)
-    
     # 1. ADD THIS FLAG HERE
     update_marker = True
 
@@ -233,41 +267,63 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     history_err_y = []
     history_err_yaw = []
     history_time = []
-    
+
     dt = env.unwrapped.step_dt
     current_episode_time = 0.0
+    episode_count = 0
 
-    plt.ion() # Turn on interactive mode
+    # ==========================================================
+    # PLOT MODE: switch to an interactive backend only if requested.
+    # Default stays "Agg" (headless-safe, file-only) unless the user
+    # asks for "live" or "both". Falls back to save-only if no display
+    # is available (e.g. running over SSH with no X forwarding).
+    # ==========================================================
+    if args_cli.plot_mode in ("live", "both"):
+        try:
+            plt.switch_backend("TkAgg")
+            plt.ion()
+            print("[INFO] Live plot window enabled (--plot_mode live/both).")
+        except Exception as e:
+            print(f"[WARN] Could not enable live plotting (no display available?): {e}")
+            print("[WARN] Falling back to --plot_mode save.")
+            args_cli.plot_mode = "save"
+
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # ==========================================================
 
     # Simulate environment
-    while simulation_app.is_running():
+    while simulation_app.is_running() and timestep < max_steps:
         # run everything in inference mode
         with torch.inference_mode():
             # 1. Compute actions from the policy
             actions = policy(obs)
 
             # ==========================================================
-            # 2. CAPTURE ERROR BEFORE RESET
-            # Grab the command (which contains the remaining local error)
+            # 2. CAPTURE ERROR *BEFORE* STEP/RESET — this is the actual
+            # final error of the episode that's about to end. Capturing
+            # it AFTER env.step() would read the NEXT (freshly reset)
+            # episode's random target instead, which is why the old
+            # printed numbers looked huge/random despite the plotted
+            # trajectory (built up during the episode, before any
+            # reset) looking correct.
             # ==========================================================
             current_command = env.unwrapped.command_manager.get_command("base_pose")
 
             final_dist = torch.norm(current_command[0, :2]).item()
             final_yaw = current_command[0, 2].item()
+            target_time = current_command[0, 4].item()
 
             # 3. Step the environment
             obs, _, dones, _ = env.step(actions)
-            
+
             # ==========================================================
             # DRAW THE TARGET COORDINATE FRAME (Fixed Orientation)
             # ==========================================================
             if update_marker:
                 command_term = env.unwrapped.command_manager.get_term("base_pose")
-                cmd = command_term.command 
-                
+                cmd = command_term.command
+
                 # 1. Directly extract the pure Yaw Command from index 3
                 cmd_yaw_angle = cmd[:, 3]
 
@@ -275,26 +331,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 robot_pos = asset.data.root_pos_w.clone()
                 robot_quat = asset.data.root_quat_w.clone()
                 robot_yaw_q = yaw_quat(robot_quat)
-                
+
                 # 2. Calculate Absolute Target Position
                 local_target_pos = torch.zeros_like(robot_pos)
                 local_target_pos[:, 0] = cmd[:, 0]
                 local_target_pos[:, 1] = cmd[:, 1]
-                
+
                 target_pos_w = robot_pos + quat_apply_yaw(robot_yaw_q, local_target_pos)
                 target_pos_w[:, 2] = 0.45  # Lock to floor
-                
+
                 # 3. Calculate Absolute Target Orientation
                 _, _, robot_yaw_angle = euler_xyz_from_quat(robot_yaw_q)
                 absolute_target_yaw = robot_yaw_angle + cmd_yaw_angle
-                
+
                 # This perfectly aligns the marker's local X-axis (Red Arrow) with the Yaw command!
                 target_quat_w = quat_from_euler_xyz(
-                    torch.zeros_like(absolute_target_yaw), 
-                    torch.zeros_like(absolute_target_yaw), 
+                    torch.zeros_like(absolute_target_yaw),
+                    torch.zeros_like(absolute_target_yaw),
                     absolute_target_yaw
                 )
-                
+
                 print(f"[DEBUG MARKER INIT]")
                 print(f"  -> Target Yaw: {absolute_target_yaw[0].item()/np.pi*180:.4f} deg")
                 print(f"  -> target_quat_w: {[round(val, 4) for val in target_quat_w[0].tolist()]}\n")
@@ -302,52 +358,57 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 target_frame_marker.visualize(target_pos_w, target_quat_w)
                 update_marker = False
             # ==========================================================
-            
+
             # ==========================================================
-            # RECORD DATA FOR THE PLOT
+            # RECORD DATA FOR THE PLOT (unaffected by the bug above —
+            # this was already being appended every step, before reset)
             # ==========================================================
-            history_err_x.append(cmd[0, 0].item()*100.0)
-            history_err_y.append(cmd[0, 1].item()*100.0)
-            history_err_yaw.append(cmd[0, 3].item() * (180.0 / math.pi)) # Convert to degrees
-            
+            history_err_x.append(current_command[0, 0].item() * 100.0)
+            history_err_y.append(current_command[0, 1].item() * 100.0)
+            history_err_yaw.append(current_command[0, 3].item() * (180.0 / math.pi))
+
             history_time.append(current_episode_time)
             current_episode_time += dt
             # ==========================================================
 
-            final_dist_cm = torch.norm(cmd[0, 0:2]).item() * 100.0
-            final_yaw = abs(cmd[0, 3].item())
-
             # ==========================================================
-            # PRINT THE ERROR AND PLOT IF THE EPISODE JUST ENDED
-            # ==========================================================
-            # 3. EPISODE END: CLEAR AND REDRAW THE CURVES
+            # PRINT THE ERROR AND SAVE PLOT IF THE EPISODE JUST ENDED
+            # Uses final_dist / final_yaw / target_time captured ABOVE,
+            # BEFORE env.step() reset them to the next episode's target.
             # ==========================================================
             if dones[0].item():
-                target_time = cmd[0, 4].item()
-                print(f"[DEBUG] Episode Complete! Final Error -> Distance: {final_dist_cm:.2f} cm | Yaw: {final_yaw/math.pi*180:.1f} deg")
+                print(f"[DEBUG] Episode Complete! Final Error -> Distance: {final_dist*100:.2f} cm | Yaw: {abs(final_yaw)/math.pi*180:.1f} deg")
                 print(f"[DEBUG] Target Time was: {target_time:.2f}s | Episode lasted: {current_episode_time:.2f}s")
-                
+
                 if len(history_time) > 1:
-                    # 🔥 NEW: CLEAR THE EXISTING GRAPH INSTEAD OF OPENING A NEW ONE
                     ax.clear()
-                    
-                    # Plot the new data
+
                     ax.plot(history_time, history_err_x, label="Error X (cm)", linewidth=2)
                     ax.plot(history_time, history_err_y, label="Error Y (cm)", linewidth=2)
                     ax.plot(history_time, history_err_yaw, label="Error Yaw (deg)", linewidth=2, linestyle='--')
-                    
+
                     ax.axvline(x=target_time, color='red', linestyle=':', linewidth=2, label=f"Target Time ({target_time:.1f}s)")
                     ax.axhline(0, color='black', linestyle='-', linewidth=1)
-                    
+
                     ax.set_title("Relative Position and Yaw Error over Time", fontsize=14)
                     ax.set_xlabel("Time Elapsed (Seconds)", fontsize=12)
                     ax.set_ylabel("Error (cm / degrees)", fontsize=12)
                     ax.legend(loc="best")
                     ax.grid(True, alpha=0.3)
-                    
-                    # 🔥 FORCE THE SCREEN TO UPDATE AND HOLD FOR 3 SECONDS
-                    plt.draw() 
-                    plt.pause(3.0) 
+
+                    # Save to disk if requested (works headless)
+                    if args_cli.plot_mode in ("save", "both"):
+                        plot_path = os.path.join(log_dir, f"episode_plot_{episode_count:03d}.png")
+                        fig.savefig(plot_path)
+                        print(f"[DEBUG] Saved plot to: {plot_path}")
+
+                    # Update the live window if requested (non-blocking)
+                    if args_cli.plot_mode in ("live", "both"):
+                        fig.canvas.draw()
+                        fig.canvas.flush_events()
+                        plt.pause(0.001)
+
+                episode_count += 1
 
                 # Reset the tracking variables
                 history_err_x.clear()
@@ -358,12 +419,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
                 update_marker = True
 
+        timestep += 1
+
+    print(f"[INFO]: Reached {timestep} steps — exiting.")
 
     # close the simulator
     env.close()
 
 
 if __name__ == "__main__":
+    print(f"[DEBUG] sys.argv right before main(): {sys.argv}")
     # run the main function
     main()
     # close sim app

@@ -1,4 +1,5 @@
 setup.py
+go1_tasks/__init__.py
 go1_tasks.egg-info/PKG-INFO
 go1_tasks.egg-info/SOURCES.txt
 go1_tasks.egg-info/dependency_links.txt

@@ -123,7 +123,11 @@ class Go1CommandsCfg:
 class Go1ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=[".*"], scale=0.30, use_default_offset=True)
+    joint_pos = mdp.JointPositionActionCfg(
+        asset_name="robot", 
+        joint_names=[".*"], 
+        scale=0.30, 
+        use_default_offset=True)
 
 
 
@@ -246,15 +250,16 @@ class Go1RewardsCfg:
     lin_vel_z_l2 = RewTerm(
         func=mdp.lin_vel_z_l2, 
         weight=-2.0)
-    ang_vel_xy_l2 = RewTerm(
-        func=mdp.ang_vel_xy_l2, 
-        weight=-0.05)
-    dof_torques_l2 = RewTerm(func=mdp.joint_torques_l2, 
-        weight=-1.0e-6) # Was -1.0e-5
-    dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, 
-        weight=-1.25e-7)        # Was -2.5e-7
+    # ang_vel_xy_l2 = RewTerm(
+    #     func=mdp.ang_vel_xy_l2, 
+    #     weight=-0.05)
+    # dof_torques_l2 = RewTerm(func=mdp.joint_torques_l2, 
+    #     weight=-1.0e-6) # Was -1.0e-5
+    # dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, 
+    #     weight=-1.25e-7)        # Was -2.5e-7
+
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, 
-        weight=-0.05)   # Was -0.01
+        weight=-0.01)   # Was -0.01
 
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
@@ -275,12 +280,13 @@ class Go1RewardsCfg:
     # Penalize tilting. This forces the robot to fight to keep its back flat.
     flat_orientation_l2 = RewTerm(
         func=mdp.flat_orientation_l2, 
-        weight=-2.0
+        weight=-5.0
     )
 
     feet_slide = RewTerm(
         func=custom_mdp.feet_slide,
-        weight=-0.5, 
+        # weight=-0.5, 
+        weight=0.0, 
         params={
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
             # CHANGE: Add body_names here so it only grabs the 4 feet velocities!
@@ -289,55 +295,78 @@ class Go1RewardsCfg:
     )
 
     # 1. The Magnet: Constant pull towards the target
-    # track_progress = RewTerm(
-    #     func=custom_mdp.progress_towards_pose_target,
-    #     weight=2.0, 
-    #     params={"command_name": "base_pose", "asset_cfg": SceneEntityCfg("robot")}
-    # )
-
-    # track_timed_trajectory = RewTerm(
-    #     func=custom_mdp.track_timed_trajectory_exp,
-    #     weight=3.0, 
-    #     params={
-    #         "command_name": "base_pose", 
-    #         "std": 0.5,
-    #         "asset_cfg": SceneEntityCfg("robot")
-    #     }
-    # )
+    track_progress = RewTerm(
+        func=custom_mdp.progress_towards_pose_target,
+        weight=2.0, 
+        params={"command_name": "base_pose", "asset_cfg": SceneEntityCfg("robot")}
+    )
 
     # 1. Timed Trajectory Tracking (Replaces standard track_progress)
     track_timed_trajectory = RewTerm(
         func=custom_mdp.track_timed_trajectory_local_exp,
         weight=4.0, 
-        params={"command_name": "base_pose", "std": 0.5, "asset_cfg": SceneEntityCfg("robot")}
+        params={"command_name": "base_pose",
+            "std": 0.5, 
+            "asset_cfg": SceneEntityCfg("robot")}
     )
 
 
     # 2. The Strict Parker (Kicks in hard when time is up and desired_vel drops to 0)
     rel_pos_tracking = RewTerm(
         func=custom_mdp.park_and_face_target_exp,
-        weight=2.0,   
-        params={"command_name": "base_pose", "pos_std": 0.25, "yaw_std": 0.5}, 
+        # weight=2.0, 
+        weight=2.0, 
+        params={"command_name": "base_pose", 
+                "pos_std": 0.25, 
+                "yaw_std": 0.15}, 
     )
+
+    # Reward for facing the exact target angle
+    track_yaw = RewTerm(
+        func=custom_mdp.track_heading_exp, # Or wherever your track_heading_exp is located
+        weight=4.0,  # Make this strong enough that the robot cares
+        params={
+            "command_name": "base_pose", 
+            "std": 0.5, # Tight standard deviation (must be within ~2-3 degrees)
+            "asset_cfg": SceneEntityCfg("robot")
+        }
+    )
+
+
+
+    # # 1. Timed Trajectory Tracking (Replaces standard track_progress)
+    # track_timed_trajectory = RewTerm(
+    #     func=custom_mdp.track_timed_trajectory_local_exp,
+    #     weight=4.0, 
+    #     params={"command_name": "base_pose", "std": 0.5, "asset_cfg": SceneEntityCfg("robot")}
+    # )
+
+
+    # # 2. The Strict Parker (Kicks in hard when time is up and desired_vel drops to 0)
+    # rel_pos_tracking = RewTerm(
+    #     func=custom_mdp.park_and_face_target_exp,
+    #     weight=2.0,   
+    #     params={"command_name": "base_pose", "pos_std": 0.25, "yaw_std": 0.5}, 
+    # )
 
 
     # 3. The 3-Legged Fix: Force the knees to bend
     nominal_pos_penalty = RewTerm(
         func=custom_mdp.nominal_joint_position_l2_penalty, 
-        weight=-0.5, # INCREASED heavily from the old -0.1 to break the kickstand exploit
+        weight=-0.05, 
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
-    # 4. The Limp Fix: Reward high, distinct steps
-    feet_air_time = RewTerm(
-        func=mdp.feet_air_time,
-        weight=0.5, # Ensure this is strong enough to encourage picking all 4 feet up
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-            "command_name": "base_pose", 
-            "threshold": 0.5,
-        },
-    )
+    # # 4. The Limp Fix: Reward high, distinct steps
+    # feet_air_time = RewTerm(
+    #     func=mdp.feet_air_time,
+    #     weight=0.5, # Ensure this is strong enough to encourage picking all 4 feet up
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+    #         "command_name": "base_pose", 
+    #         "threshold": 0.5,
+    #     },
+    # )
 
     # The Statue Penalty: Forces the robot to freeze solid when it reaches the goal
     stop_jitter = RewTerm(
@@ -346,15 +375,16 @@ class Go1RewardsCfg:
         params={"command_name": "base_pose", "asset_cfg": SceneEntityCfg("robot")}
     )
 
-    # NEW: The Golden Finish Bonus
     arrived_on_time = RewTerm(
-        func=custom_mdp.arrived_on_time_bonus,
-        weight=10.0, # Make this significantly higher than your other weights
-        params={
-            "command_name": "base_pose",
-            "threshold": 0.05, # Goal reached if within 15cm
-            "bonus": 10.0
-        }
+    func=custom_mdp.in_box_bonus,
+    weight=2.0,   # dense now, so a SMALL weight — not 10
+    params={
+        "command_name": "base_pose",
+        "threshold": 0.05,
+        "yaw_threshold": 0.087,
+        "height_target": 0.30,
+        "height_tol": 0.04,
+        },
     )
 
     # Penalize the robot for arriving too early
@@ -363,6 +393,67 @@ class Go1RewardsCfg:
         weight=-2.0, # Adjust this negative weight to make it "feel" the penalty
         params={"command_name": "base_pose", "threshold": 0.15}
     )
+
+
+    # Force the robot to keep its belly off the ground
+    base_height = RewTerm(
+        func=mdp.base_height_l2, 
+        weight=-30.0, # Strong penalty for crouching/falling
+        # weight=0.0, # Strong penalty for crouching/falling
+        params={"target_height": 0.35, "asset_cfg": SceneEntityCfg("robot")}
+    )
+
+
+    gait = RewTerm(
+        func=custom_mdp.GaitReward,
+        weight=2.0,
+        params={
+            "std": 0.025,
+            "max_err": 0.05,
+            # "velocity_threshold": 0.5,
+            "distance_threshold": 0.05,
+            # MC specific trot pairing: (Front-Left + Rear-Right) & (Front-Right + Rear-Left)
+            "synced_feet_pair_names": (("FL_foot", "RR_foot"), ("FR_foot", "RL_foot")), 
+            "asset_cfg": SceneEntityCfg("robot"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", 
+                    body_names=".*foot"),
+        },
+    )
+
+    foot_clearance = RewTerm(
+        func=custom_mdp.foot_clearance_reward,
+        weight=0.5,
+        params={
+            "std": 0.05,
+            "tanh_mult": 2.0,
+            "target_height": 0.1,
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*foot"),
+        },
+    )
+
+    action_smoothness = RewTerm(func=custom_mdp.action_smoothness_penalty, 
+        weight=-1.0)
+
+
+    joint_acc = RewTerm(
+        func=custom_mdp.joint_acceleration_penalty,
+        weight=-1.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+
+    # joint_vel = RewTerm(
+    #     func=custom_mdp.joint_velocity_penalty,
+    #     weight=-1.0e-2,
+    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    # )
+
+    joint_torques = RewTerm(
+        func=custom_mdp.joint_torques_penalty,
+        weight=-5.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
+    )
+
+
 
 @configclass
 class Go1TerminationsCfg:

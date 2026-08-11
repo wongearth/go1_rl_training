@@ -230,6 +230,20 @@ class Go1RewardsCfg:
         },
     )
 
+    # # Force the robot to keep its belly off the ground
+    # base_height = RewardTermCfg(
+    #     func=mdp.base_height_l2, 
+    #     # weight=-30.0, # Strong penalty for crouching/falling
+    #     weight=-75.0, # Strong penalty for crouching/falling
+    #     params={"target_height": 0.35, "asset_cfg": SceneEntityCfg("robot")}
+    # )
+
+    base_height_crouch = RewardTermCfg(
+        func=go1_mdp.base_height_below_target_penalty,
+        weight=-80.0,
+        params={"target_height": 0.35, "asset_cfg": SceneEntityCfg("robot")},
+    )
+
     # -- penalties
     action_smoothness = RewardTermCfg(func=go1_mdp.action_smoothness_penalty, weight=-1.0)
     # air_time_variance = RewardTermCfg(
@@ -429,10 +443,14 @@ class Go1VelocityFlatEnvCfg_PLAY(Go1VelocityFlatEnvCfg):
         # make a smaller scene for play
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
-        # spawn the robot randomly in the grid (instead of their terrain levels)
+
+        self.scene.terrain.terrain_type = "plane"
+        self.scene.terrain.terrain_generator = None   # drop the rough-terrain generator
         self.scene.terrain.max_init_terrain_level = None
 
-        # reduce the number of terrains to save memory
+        self.curriculum.terrain_levels = None
+        
+        # # reduce the number of terrains to save memory
         if self.scene.terrain.terrain_generator is not None:
             self.scene.terrain.terrain_generator.num_rows = 5
             self.scene.terrain.terrain_generator.num_cols = 5

@@ -6,11 +6,11 @@
 """Script to train RL agent with RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""
-
 import argparse
 import sys
 
 from isaaclab.app import AppLauncher
+# At the very top of scripts/rsl_rl/train.py
 
 # local imports
 import cli_args  # isort: skip
@@ -54,6 +54,8 @@ import importlib.metadata as metadata
 import platform
 
 from packaging import version
+import torch
+torch.autograd.set_detect_anomaly(True)
 
 # check minimum supported rsl-rl version
 RSL_RL_VERSION = "3.0.1"
@@ -96,6 +98,8 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 import go1_tasks.manager_based.locomotion.move_p2p
+# import go1_tasks
+import mc_tasks
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
@@ -117,6 +121,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if hasattr(env_cfg, "events") and hasattr(env_cfg.events, "reset_rel_pose"):
         if env_cfg.events.reset_rel_pose is not None:
             print(f"\n[DEBUG] reset_rel_pose is running from: {env_cfg.events.reset_rel_pose.func.__module__}\n")
+            print(f"[DEBUG] robot spawn pos: {env_cfg.scene.robot.init_state.pos}")
+            print(f"[DEBUG] robot spawn joint_pos: {env_cfg.scene.robot.init_state.joint_pos}")
 
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations

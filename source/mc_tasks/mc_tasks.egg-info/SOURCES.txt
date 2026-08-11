@@ -1,0 +1,7 @@
+setup.py
+mc_tasks/__init__.py
+mc_tasks.egg-info/PKG-INFO
+mc_tasks.egg-info/SOURCES.txt
+mc_tasks.egg-info/dependency_links.txt
+mc_tasks.egg-info/requires.txt
+mc_tasks.egg-info/top_level.txt

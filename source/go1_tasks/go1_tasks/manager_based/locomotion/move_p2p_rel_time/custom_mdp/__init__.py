@@ -7,11 +7,11 @@
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
-from .curriculums import *  # noqa: F401, F403
-from .rewards import *  # noqa: F401, F403
-from .terminations import *  # noqa: F401, F403
+from .my_curriculums import *  # noqa: F401, F403
+from .my_rewards import *  # noqa: F401, F403
+from .my_terminations import *  # noqa: F401, F403
 
 # File: mdp/__init__.py
-from .events import *
-from .observations import *
-from .commands import *
+from .my_events import *
+from .my_observations import *
+from .my_commands import *

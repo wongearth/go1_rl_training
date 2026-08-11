@@ -84,6 +84,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import go1_tasks.manager_based.locomotion.move_p2p
 import go1_tasks.manager_based.locomotion.velocity
 
+import mc_tasks
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
