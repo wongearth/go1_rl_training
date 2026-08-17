@@ -2,10 +2,13 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
+import math
 
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.envs import ViewerCfg
+from isaaclab.envs import ManagerBasedRLEnvCfg
+
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -73,7 +76,10 @@ class Go1CommandsCfg:
             # Fixed the Y-axis bug here to stop permanent strafing
             # lin_vel_x=(-1.0, 2.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-2.0, 2.0)
             # lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.2, 0.2), ang_vel_z=(-0.5, 0.5)
-            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-0.8, 0.8)
+            # lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-0.8, 0.8)
+            # lin_vel_x=(-1.5, 1.5), lin_vel_y=(-0.75, 0.75), ang_vel_z=(-0.8, 0.8)
+            # lin_vel_x=(-1.5, 1.5), lin_vel_y=(-0.75, 0.75), ang_vel_z=(-1.6, 1.6) # Good
+            lin_vel_x=(-1.5, 1.5), lin_vel_y=(-0.75, 0.75), ang_vel_z=(-2.4, 2.4)
         ),
     )
 
@@ -185,166 +191,55 @@ class Go1EventCfg:
 
 @configclass
 class Go1RewardsCfg:
-    # -- task
-    air_time = RewardTermCfg(
-        func=go1_mdp.air_time_reward,
-        weight=5.0,
-        params={
-            "mode_time": 0.3,
-            "velocity_threshold": 0.5,
-            "asset_cfg": SceneEntityCfg("robot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"), # Go1 uses _foot
-        },
-    )
-    base_angular_velocity = RewardTermCfg(
-        func=go1_mdp.base_angular_velocity_reward,
-        weight=5.0,
-        params={"std": 2.0, "asset_cfg": SceneEntityCfg("robot")},
-    )
-    base_linear_velocity = RewardTermCfg(
-        func=go1_mdp.base_linear_velocity_reward,
-        weight=5.0,
-        params={"std": 1.0, "ramp_rate": 0.5, "ramp_at_vel": 1.0, "asset_cfg": SceneEntityCfg("robot")},
-    )
-    foot_clearance = RewardTermCfg(
-        func=go1_mdp.foot_clearance_reward,
-        weight=0.5,
-        params={
-            "std": 0.05,
-            "tanh_mult": 2.0,
-            "target_height": 0.1,
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-        },
-    )
-    gait = RewardTermCfg(
-        func=go1_mdp.GaitReward,
-        weight=10.0,
-        params={
-            "std": 0.025,
-            "max_err": 0.05,
-            "velocity_threshold": 0.5,
-            # Go1 specific trot pairing: (Front-Left + Rear-Right) & (Front-Right + Rear-Left)
-            "synced_feet_pair_names": (("FL_foot", "RR_foot"), ("FR_foot", "RL_foot")), 
-            "asset_cfg": SceneEntityCfg("robot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces"),
-        },
-    )
 
-    # # Force the robot to keep its belly off the ground
-    # base_height = RewardTermCfg(
-    #     func=mdp.base_height_l2, 
-    #     # weight=-30.0, # Strong penalty for crouching/falling
-    #     weight=-75.0, # Strong penalty for crouching/falling
-    #     params={"target_height": 0.35, "asset_cfg": SceneEntityCfg("robot")}
-    # )
+    # -- task
+    track_lin_vel_xy_exp = RewardTermCfg(
+        func=mdp.track_lin_vel_xy_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    )
+    track_ang_vel_z_exp = RewardTermCfg(
+        func=mdp.track_ang_vel_z_exp, weight=0.5, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    )
+    # -- penalties
+    lin_vel_z_l2 = RewardTermCfg(func=mdp.lin_vel_z_l2, weight=-2.0)
+    ang_vel_xy_l2 = RewardTermCfg(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    dof_torques_l2 = RewardTermCfg(func=mdp.joint_torques_l2, weight=-1.0e-5)
+    dof_acc_l2 = RewardTermCfg(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    action_rate_l2 = RewardTermCfg(func=mdp.action_rate_l2, 
+        # weight=-0.01)
+        weight=-0.005)
+
+    feet_air_time = RewardTermCfg(
+        func=mdp.feet_air_time,
+        # weight=0.125,
+        weight=0.3,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*foot"),
+            "command_name": "base_velocity",
+            "threshold": 0.5,
+        },
+    )
+    undesired_contacts = RewardTermCfg(
+        func=mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*thigh"), 
+            "threshold": 1.0},
+    )
+    # -- optional penalties
+    flat_orientation_l2 = RewardTermCfg(func=mdp.flat_orientation_l2, weight=0.0)
+    dof_pos_limits = RewardTermCfg(func=mdp.joint_pos_limits, weight=0.0)
 
     base_height_crouch = RewardTermCfg(
         func=go1_mdp.base_height_below_target_penalty,
         weight=-80.0,
-        params={"target_height": 0.35, "asset_cfg": SceneEntityCfg("robot")},
+        params={"target_height": 0.32, "asset_cfg": SceneEntityCfg("robot")},
     )
 
-    # -- penalties
-    action_smoothness = RewardTermCfg(func=go1_mdp.action_smoothness_penalty, weight=-1.0)
-    # air_time_variance = RewardTermCfg(
-    #     func=go1_mdp.air_time_variance_penalty,
-    #     weight=-1.0,
-    #     params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
-    # )
-    base_motion = RewardTermCfg(
-        func=go1_mdp.base_motion_penalty, 
-        # weight=-5.0, 
-        weight=-1.0, 
-        params={"asset_cfg": SceneEntityCfg("robot")}
+    hip_deviation = RewardTermCfg(
+        func=mdp.joint_deviation_l1,
+        weight=-0.2,   # start modest; raise if stance stays narrow
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*_hip_joint")},
     )
-    base_orientation = RewardTermCfg(
-        func=go1_mdp.base_orientation_penalty, weight=-3.0, params={"asset_cfg": SceneEntityCfg("robot")}
-    )
-    foot_slip = RewardTermCfg(
-        func=go1_mdp.foot_slip_penalty,
-        # weight=-0.5,
-        weight=-0.05,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-            "threshold": 1.0,
-        },
-    )
-    # joint_acc = RewardTermCfg(
-    #     func=go1_mdp.joint_acceleration_penalty,
-    #     weight=-1.0e-4,
-    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*_hip_joint")},
-    # )
-    # # ...
-    # joint_vel = RewardTermCfg(
-    #     func=go1_mdp.joint_velocity_penalty,
-    #     weight=-1.0e-2,
-    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*_hip_joint")},
-    # )
-    joint_acc = RewardTermCfg(
-        func=go1_mdp.joint_acceleration_penalty,
-        weight=-1.0e-4,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-    # ...
-    joint_vel = RewardTermCfg(
-        func=go1_mdp.joint_velocity_penalty,
-        weight=-1.0e-2,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-
-    joint_torques = RewardTermCfg(
-        func=go1_mdp.joint_torques_penalty,
-        weight=-5.0e-4,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-
-    # # Default weight is usually around 1.0 or 0.125 depending on the base class. 
-    # feet_air_time = RewardTermCfg(
-    #     func=mdp.feet_air_time,
-    #     weight=0.2,  
-    #     params={
-    #         # Changed to body_names!
-    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-    #         "command_name": "base_velocity",
-    #         "threshold": 0.4,
-    #     },
-    # )
-
-    # 2. THE TWITCH FIX (Action Rate)
-    # # Default weight is usually -0.01. 
-    # # Making it more negative heavily penalizes the neural network for sending
-    # action_rate_l2 = RewardTermCfg(
-    #     func=mdp.action_rate_l2,
-    #     weight=-0.05, # <--- MAKE THIS MORE NEGATIVE
-    # )
-
-    # Penalize high energy usage
-    dof_torques_l2 = RewardTermCfg(
-        func=mdp.joint_torques_l2,
-        weight=-0.0002, # Make this slightly more negative to encourage efficient, flowing movement
-    )
-
-    # # The Root-Cause Limping Fix: Penalize asymmetric air times!
-    # air_time_variance = RewardTermCfg(
-    #     func=go1_mdp.rewards.feet_air_time_variance, # <--- Pointing to YOUR new custom function!
-    #     weight=-5.0, # Make this heavily negative
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-    #         "command_name": "base_velocity",
-    #     },
-    # )
-
-    # # Penalize slamming the feet into the ground
-    # contact_force_spikes = RewardTermCfg(
-    #     func=go1_mdp.contact_forces_penalty,
-    #     weight=-0.01, 
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"), 
-    #         "max_contact_force": 300.0, # Adjust this based on Go1's weight. If it still limps, lower this to 200.0
-    #     },
-    # )
-
 
 @configclass
 class Go1TerminationsCfg:
@@ -397,6 +292,14 @@ class Go1VelocityFlatEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # switch robot to Go1
         self.scene.robot = UNITREE_GO1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        # widen the default stance: increase hip abduction magnitude (mirrored L/R)
+        self.scene.robot.init_state.joint_pos = {
+            ".*L_hip_joint": 0.2,     # was ~0.1  -> wider left
+            ".*R_hip_joint": -0.2,    # was ~-0.1 -> wider right
+            ".*_thigh_joint": 0.8,    # keep stock
+            ".*_calf_joint": -1.5,    # keep stock
+        }
+
 
         # # Kill the Actuator Net and force the Go1 to use standard Ideal PD motors
         # self.scene.robot.actuators = {
@@ -449,7 +352,7 @@ class Go1VelocityFlatEnvCfg_PLAY(Go1VelocityFlatEnvCfg):
         self.scene.terrain.max_init_terrain_level = None
 
         self.curriculum.terrain_levels = None
-        
+
         # # reduce the number of terrains to save memory
         if self.scene.terrain.terrain_generator is not None:
             self.scene.terrain.terrain_generator.num_rows = 5
@@ -460,3 +363,4 @@ class Go1VelocityFlatEnvCfg_PLAY(Go1VelocityFlatEnvCfg):
         self.observations.policy.enable_corruption = False
         # remove random pushing event
         self.events.push_robot = None
+

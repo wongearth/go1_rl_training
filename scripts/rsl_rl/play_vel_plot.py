@@ -196,6 +196,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # plot every 5 seconds of sim time
     window_steps = int(round(5.0 / dt))
+    settle_steps = int(round(1.0 / dt))
+
     plot_dir = os.path.join(log_dir, "play_plots")
     os.makedirs(plot_dir, exist_ok=True)
     print(f"[INFO] Saving 5s error plots to: {plot_dir}  ({window_steps} steps/window)")
@@ -251,23 +253,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs, _, _, _ = env.step(actions)
 
         # --- record env 0 ground-truth state ---
-        cmd = cmd_mgr.get_command("base_velocity")[0]          # (3,): vx, vy, wz
-        lin_b = robot.data.root_lin_vel_b[0]                   # base-frame linear vel
-        ang_b = robot.data.root_ang_vel_b[0]                   # base-frame angular vel
-        h = robot.data.root_pos_w[0, 2]                        # world-z height
+        cmd = cmd_mgr.get_command("base_velocity")[0]
+        lin_b = robot.data.root_lin_vel_b[0]
+        ang_b = robot.data.root_ang_vel_b[0]
+        h = robot.data.root_pos_w[0, 2]
         if step_in_window % 50 == 0:
             print("root_z:", float(robot.data.root_pos_w[0, 2]),
                   "default_root_z:", float(robot.data.default_root_state[0, 2]))
 
-        buf["t"].append(sim_time)
-        buf["cmd_vx"].append(float(cmd[0])); buf["cmd_vy"].append(float(cmd[1])); buf["cmd_wz"].append(float(cmd[2]))
-        buf["vx"].append(float(lin_b[0]));   buf["vy"].append(float(lin_b[1]));   buf["wz"].append(float(ang_b[2]))
-        buf["height"].append(float(h))
+        if step_in_window >= settle_steps:          # <-- ADD: only record after 1s settle
+            buf["t"].append(sim_time)
+            buf["cmd_vx"].append(float(cmd[0])); buf["cmd_vy"].append(float(cmd[1])); buf["cmd_wz"].append(float(cmd[2]))
+            buf["vx"].append(float(lin_b[0]));   buf["vy"].append(float(lin_b[1]));   buf["wz"].append(float(ang_b[2]))
+            buf["height"].append(float(h))
 
-        sim_time += dt
-        step_in_window += 1
+        sim_time += dt                              # <-- stays OUTSIDE the if
+        step_in_window += 1                         # <-- stays OUTSIDE the if
 
         # --- every 5 s: plot, then restart robot at origin ---
+
+
         if step_in_window >= window_steps:
             flush_window(window_idx)
             window_idx += 1

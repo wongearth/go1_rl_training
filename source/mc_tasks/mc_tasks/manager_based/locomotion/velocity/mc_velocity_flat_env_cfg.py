@@ -99,10 +99,11 @@ class MySceneCfg(InteractiveSceneCfg):
 
     # contact sensor (matches the proven P2P path)
     contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/QuadrupedRobot/(Body|UpperLeg.*|LowerLeg.*)",
+        prim_path="{ENV_REGEX_NS}/Robot/QuadrupedRobot/(Body|UpperLeg.*|LowerLeg.*/Foot/Contact"),
         update_period=0.005,
         history_length=3,
         track_air_time=True,
+        # force_threshold=20.0,
     )
 
     # flat ground -> no height scanner
@@ -146,8 +147,9 @@ class MCCommandsCfg:
         heading_command=False,
         debug_vis=True,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-        # lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-0.8, 0.8)
-        lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-0.8, 0.8)
+        lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-0.8, 0.8)
+        # lin_vel_x=(-1.5, 1.5), lin_vel_y=(-0.75, 0.75), ang_vel_z=(-3.14, 3.14)
+        # lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-0.8, 0.8)
         ),
     )
 
@@ -228,8 +230,10 @@ class MCEventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="Body"),
-            "force_range": (-5.0, 5.0),
-            "torque_range": (-1.0, 1.0),
+            # "force_range": (-5.0, 5.0),
+            # "torque_range": (-1.0, 1.0),
+            "force_range": (0.0, 0.0),
+            "torque_range": (-0.0, 0.0),
         },
     )
 
@@ -261,8 +265,8 @@ class MCEventCfg:
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
-        # interval_range_s=(10.0, 15.0),
-        interval_range_s=(3.0, 5.0),
+        interval_range_s=(10.0, 15.0),
+        # interval_range_s=(3.0, 5.0),
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)},
@@ -273,124 +277,92 @@ class MCEventCfg:
 @configclass
 class MCRewardsCfg:
     # -- task
-    air_time = RewardTermCfg(
-        func=custom_mdp.air_time_reward,
-        weight=5.0,
+    # -- task
+    track_lin_vel_xy_exp = RewardTermCfg(
+        func=mdp.track_lin_vel_xy_exp, 
+        # weight=1.0, 
+        weight=4.0, 
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    )
+    track_ang_vel_z_exp = RewardTermCfg(
+        func=mdp.track_ang_vel_z_exp, 
+        # weight=0.5, 
+        weight=2.0, 
+        params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+    )
+    # -- penalties
+    lin_vel_z_l2 = RewardTermCfg(func=mdp.lin_vel_z_l2, weight=-2.0)
+    ang_vel_xy_l2 = RewardTermCfg(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    dof_torques_l2 = RewardTermCfg(func=mdp.joint_torques_l2, weight=-1.0e-5)
+    dof_acc_l2 = RewardTermCfg(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    action_rate_l2 = RewardTermCfg(func=mdp.action_rate_l2, 
+        # weight=-0.01)
+        weight=-0.005)
+
+    feet_air_time = RewardTermCfg(
+        func=mdp.feet_air_time,
+        # weight=0.125,
+        weight=0.3,
         params={
-            "mode_time": 0.3,
-            "velocity_threshold": 0.5,
-            "asset_cfg": SceneEntityCfg("robot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="LowerLeg.*/Foot/Contact"),
+            "command_name": "base_velocity",
+            "threshold": 0.5,
         },
     )
-    base_angular_velocity = RewardTermCfg(
-        func=custom_mdp.base_angular_velocity_reward,
-        weight=10.0,
-        params={"std": 2.0, "asset_cfg": SceneEntityCfg("robot")},
+    undesired_contacts = RewardTermCfg(
+        func=mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="UpperLeg.*"), 
+            "threshold": 1.0},
     )
-    base_linear_velocity = RewardTermCfg(
-        func=custom_mdp.base_linear_velocity_reward,
-        weight=10.0,
-        params={"std": 1.0, "ramp_rate": 0.5, "ramp_at_vel": 1.0, "asset_cfg": SceneEntityCfg("robot")},
+    # -- optional penalties
+    flat_orientation_l2 = RewardTermCfg(
+        func=mdp.flat_orientation_l2, 
+        weight=-5.0)
+
+    dof_pos_limits = RewardTermCfg(
+        func=mdp.joint_pos_limits, 
+        weight=0.0)
+
+    base_height_crouch = RewardTermCfg(
+        func=custom_mdp.base_height_below_target_penalty,
+        # weight=-80.0,
+        weight=-150.0,
+        params={"target_height": 0.32, "asset_cfg": SceneEntityCfg("robot")},
+    )
+
+    hip_deviation = RewardTermCfg(
+        func=mdp.joint_deviation_l1,
+        # weight=-0.2,   # start modest; raise if stance stays narrow
+        weight=-0.0,   # start modest; raise if stance stays narrow
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["q0", "q3", "q6", "q9"])},
+    )
+
+    gait = RewardTermCfg(
+        func=custom_mdp.GaitReward,   # your P2P GaitReward, or the Spot one in your custom_mdp
+        weight=3.0,                   # start moderate; task terms must still dominate
+        params={
+            "std": 0.025,
+            "max_err": 0.05,
+            "velocity_threshold": 0.1,
+            "synced_feet_pair_names": (("LowerLeg0", "LowerLeg3"), ("LowerLeg1", "LowerLeg2")),
+            "asset_cfg": SceneEntityCfg("robot", body_names="LowerLeg.*/Foot/Contact"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="LowerLeg.*/Foot/Contact"),
+        },
     )
 
     foot_clearance = RewardTermCfg(
         func=custom_mdp.foot_clearance_reward,
-        # weight=0.5,
-        weight=0.0,
+        weight=0.5,
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
             "target_height": 0.1,
-            "asset_cfg": SceneEntityCfg("robot", body_names="LowerLeg.*"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="LowerLeg.*/Foot/Contact"),
         },
     )
 
-    # -- penalties
-    feet_air_time_variance = RewardTermCfg(
-        func=custom_mdp.feet_air_time_variance,
-        weight=-1.0, 
-        params={
-            "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
-        },
-    )
-
-    gait = RewardTermCfg(
-        func=custom_mdp.GaitReward,
-        weight=3.0,
-        params={
-            "std": 0.025,
-            "max_err": 0.05,
-            "velocity_threshold": 0.5,
-            # MC trot pairing: (FL + RR) & (FR + RL)
-            "synced_feet_pair_names": (("LowerLeg0", "LowerLeg3"), ("LowerLeg1", "LowerLeg2")),
-            "asset_cfg": SceneEntityCfg("robot"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
-        },
-    )
-
-    # -- penalties
-    action_smoothness = RewardTermCfg(func=custom_mdp.action_smoothness_penalty, 
-        weight=-1.0)
-    
-    base_motion = RewardTermCfg(
-        func=custom_mdp.base_motion_penalty, 
-        weight=-0.5, 
-        params={"asset_cfg": SceneEntityCfg("robot")}
-    )
-
-    base_orientation = RewardTermCfg(
-        func=custom_mdp.base_orientation_penalty, 
-        # weight=-3.0, 
-        weight=-0.2, 
-        params={"asset_cfg": SceneEntityCfg("robot")}
-    )
-    foot_slip = RewardTermCfg(
-        func=custom_mdp.foot_slip_penalty,
-        weight=-0.05,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="LowerLeg.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
-            "threshold": 1.0,
-        },
-    )
-    joint_acc = RewardTermCfg(
-        func=custom_mdp.joint_acceleration_penalty,
-        # weight=-1.0e-4,
-        # weight=-2.5e-7,
-        weight=0.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-    joint_vel = RewardTermCfg(
-        func=custom_mdp.joint_velocity_penalty,
-        # weight=-1.0e-2,
-        weight=-1.0e-3,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-    joint_torques = RewardTermCfg(
-        func=custom_mdp.joint_torques_penalty,
-        # weight=-5.0e-4,
-        weight=-1.0e-4,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
-    )
-
-    dof_torques_l2 = RewardTermCfg(
-        func=mdp.joint_torques_l2,
-        weight=-0.0002,
-    )
-
-    # Force the robot to hold a normal posture, preventing wild flailing
-    joint_pos = RewardTermCfg(
-        func=custom_mdp.joint_position_penalty,
-        # weight=-0.5, 
-        weight=-0.05, 
-            params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-            "stand_still_scale": 2.0, # Punish bad posture 5x harder when commanded to stop
-            "velocity_threshold": 0.1
-        },
-    )
 
 @configclass
 class MCTerminationsCfg:

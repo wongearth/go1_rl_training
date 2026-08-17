@@ -452,3 +452,19 @@ def contact_forces_penalty(
     
     # 5. Sum up the penalties across all four feet
     return torch.sum(penalty, dim=-1)
+
+def base_height_below_target_penalty(
+    env: ManagerBasedRLEnv,
+    target_height: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize crouching only: squared error applied ONLY when below target height.
+
+    Unlike base_height_l2 (symmetric), this does not fight the robot for standing
+    at or above target, so it can be weighted heavily to force stance height
+    without the collateral gait stiffness a large symmetric penalty causes.
+    """
+    asset = env.scene[asset_cfg.name]
+    height = asset.data.root_pos_w[:, 2]
+    deficit = torch.clamp(target_height - height, min=0.0)   # 0 when at/above target
+    return torch.square(deficit)

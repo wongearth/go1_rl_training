@@ -120,6 +120,17 @@ def main():
             joint_err = (robot.data.joint_pos[0] - joint_pos[0]).abs().max().item()
             print(f"[t={step_count*0.01:5.1f}s] root height: {root_h:6.3f} m   max joint error: {joint_err:6.3f} rad")
 
+            # LowerLeg0 body-frame origin height (what rewards read as "foot")
+            ll_ids, _ = robot.find_bodies("LowerLeg0")
+            ll_z = robot.data.body_pos_w[0, ll_ids[0], 2]
+
+            # contact sensor: is it reporting force on LowerLeg0, and how much?
+            cs = env.scene.sensors["contact_forces"]
+            cs_ids, _ = cs.find_bodies("LowerLeg0")
+            fz = cs.data.net_forces_w[0, cs_ids[0], 2]   # vertical contact force
+
+            print(f"LowerLeg0 origin z = {float(ll_z):.4f}   contact Fz = {float(fz):.3f}")
+
 
 if __name__ == "__main__":
     main()
