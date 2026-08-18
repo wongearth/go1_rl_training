@@ -147,8 +147,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.viewer.origin_type = "asset_root"
     # env_cfg.viewer.origin_type = "world"
     env_cfg.viewer.asset_name = "robot"
-    env_cfg.viewer.eye = (1.0, 0.0, -0.05)      # close, and near LEG height (not overhead)
-    env_cfg.viewer.lookat = (0.0, 0.0, 0.05)   # look roughly at leg-height, not the body center
+    # env_cfg.viewer.eye = (1.0, 0.0, -0.05)      # close, and near LEG height (not overhead)
+    # env_cfg.viewer.lookat = (0.0, 0.0, 0.05)   # look roughly at leg-height, not the body center
+    env_cfg.viewer.eye = (0.0, 0.0, 5.0)      # close, and near LEG height (not overhead)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.0)   # look roughly at leg-height, not the body center
 
 
     # specify directory for logging experiments

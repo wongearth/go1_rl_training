@@ -97,14 +97,24 @@ class MySceneCfg(InteractiveSceneCfg):
     # robot (MC quadruped)
     robot = MC_QUADRUPED_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
-    # contact sensor (matches the proven P2P path)
+    # # contact sensor (matches the proven P2P path)
+    # contact_forces = ContactSensorCfg(
+    #     prim_path="{ENV_REGEX_NS}/Robot/QuadrupedRobot/(Body|UpperLeg.*|LowerLeg.*/Foot/Contact)",
+    #     update_period=0.005,
+    #     history_length=3,
+    #     track_air_time=True,
+    #     # force_threshold=20.0,
+    # )
+
     contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/QuadrupedRobot/(Body|UpperLeg.*|LowerLeg.*/Foot/Contact"),
-        update_period=0.005,
-        history_length=3,
-        track_air_time=True,
-        # force_threshold=20.0,
+        prim_path="{ENV_REGEX_NS}/Robot/QuadrupedRobot/LowerLeg.*/Foot/Contact",
+        update_period=0.005, history_length=3, track_air_time=True,
     )
+    contact_forces_body = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/QuadrupedRobot/(Body|UpperLeg.*)",
+        update_period=0.005, history_length=3,
+    )
+
 
     # flat ground -> no height scanner
     height_scanner = None

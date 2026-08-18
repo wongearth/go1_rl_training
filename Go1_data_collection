@@ -1,0 +1,77 @@
+# 1. Generate commands
+
+rm p2p_commands.csv
+python generate_commands.py --num_episodes 100 --seed 42 --out p2p_commands.csv --x_range -1.5 1.5 --y_range -0.75 0.75 --time_range 2.5 4.0
+
+
+# 2. Collect vel profile run
+
+bash scripts/rsl_rl/collect_via_single.sh Isaac-Go1-Velocity-Flat-Play-v0 "" 100
+# the command above need file play_vel_p2p_single.py
+# then it will save result in  results_velocity.py
+
+# 3 Then collect p2p time 
+# P2P run — reuses the SAME p2p_commands.csv, writes results_p2p.csv
+python scripts/rsl_rl/collect_p2p_time_batch.py \
+    --task Isaac-Go1-P2P_Rel_Time-Play-v0 --headless \
+    --num_episodes 100 --commands_csv p2p_commands.csv \
+    --results_csv results_p2p.csv --inject_commands
+
+# 4. Then compare results
+python scripts/rsl_rl/collect_compare_results.py \
+    --vel results_velocity.csv --p2p results_p2p.csv \
+    --out_prefix compare --dist_floor 0.3
+
+
+
+###################################################################################
+
+
+# 1. velocity run — creates p2p_commands.csv on first run, writes results_velocity.csv
+# python scripts/rsl_rl/collect_vel_p2p_spline.py \
+#    --task Isaac-Go1-Velocity-Flat-Play-v0 --headless \
+#    --num_episodes 100 \
+#    --commands_csv p2p_commands.csv --results_csv results_velocity.csv \
+
+#    --target_x_range -1.5 1.5 --target_y_range -0.75 0.75 \
+#    --checkpoint <vel_checkpoint>
+
+
+python scripts/rsl_rl/collect_vel_p2p_spline.py \
+  --task Isaac-Go1-Velocity-Flat-Play-v0 \
+  --num_episodes 100 --commands_csv p2p_commands.csv \
+  --results_csv results_velocity.csv \
+  --headless 
+  
+  --checkpoint <vel_checkpoint>
+
+
+# 2. P2P run — reuses the SAME p2p_commands.csv, writes results_p2p.csv
+python scripts/rsl_rl/collect_p2p_time_batch.py \
+    --task Isaac-Go1-P2P_Rel_Time-Play-v0 --headless \
+    --num_episodes 100 --commands_csv p2p_commands.csv \
+    --results_csv results_p2p.csv --inject_commands
+
+
+# 3 Compare results
+python scripts/rsl_rl/collect_compare_results.py \
+    --vel results_velocity.csv --p2p results_p2p.csv \
+    --out_prefix compare --dist_floor 0.3
+
+
+# play outliner  non headless mode
+python scripts/rsl_rl/collect_vel_p2p_spline.py \
+  --task Isaac-Go1-Velocity-Flat-Play-v0 --num_episodes 8 \
+  --commands_csv outlier_commands.csv \
+  --results_csv /tmp/test.csv --headless 
+  
+  --checkpoint <vel_checkpoint>
+
+
+python scripts/rsl_rl/play_vel_p2p_single.py \
+  --task Isaac-Go1-Velocity-Flat-Play-v0 \
+  --commands_csv outlier_commands.csv --cycle 
+
+  --checkpoint <vel_checkpoint>
+
+bash scripts/rsl_rl/collect_via_single.sh Isaac-Go1-Velocity-Flat-Play-v0 100
