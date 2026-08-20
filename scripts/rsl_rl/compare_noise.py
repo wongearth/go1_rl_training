@@ -29,11 +29,26 @@ def load(path):
         r = csv.reader(f)
         header = next(r)
         rows = [row for row in r if row]
-    # tolerate the 7-col (no noise meta) or 9-col schema
+    # tolerate 7-col (no meta), 9-col (pose-noise meta), or 11-col (+sensor meta)
     data = np.array([[float(x) for x in row[:7]] for row in rows])
-    model = rows[0][7] if len(rows[0]) > 7 else "?"
-    k = rows[0][8] if len(rows[0]) > 8 else "?"
-    return data, model, k
+    r0 = rows[0]
+    pose_model = r0[7] if len(r0) > 7 else "?"
+    pose_k = r0[8] if len(r0) > 8 else "?"
+    sensor_noise = r0[9] if len(r0) > 9 else "none"
+    sensor_k = r0[10] if len(r0) > 10 else "0"
+    # Build a label that reflects whatever noise was ACTUALLY active:
+    #  - sensor noise active -> "<channels> sk<k>"  (e.g. "all sk3")
+    #  - pose-error noise active -> "<model> k<k>"  (e.g. "gaussian k1")
+    #  - neither -> "clean"
+    def _active(v):
+        return v not in ("none", "0", "0.000", "?", "")
+    if _active(sensor_noise) and _active(sensor_k):
+        label = f"{sensor_noise} sk{float(sensor_k):g}"
+    elif _active(pose_model) and _active(pose_k):
+        label = f"{pose_model} k{float(pose_k):g}"
+    else:
+        label = "clean"
+    return data, label
 
 
 def wrap(a):
@@ -64,8 +79,8 @@ def main():
     ap.add_argument("--cmd_tol", type=float, default=1e-3)
     args = ap.parse_args()
 
-    craw, cm, ck = load(args.clean)
-    nraw, nm, nk = load(args.noise)
+    craw, clabel = load(args.clean)
+    nraw, nlabel = load(args.noise)
     n = min(len(craw), len(nraw))
     if len(craw) != len(nraw):
         print(f"[WARN] different counts clean={len(craw)} noise={len(nraw)}; using first {n}")
@@ -76,7 +91,7 @@ def main():
     paired = md <= args.cmd_tol
     print(f"[{'OK' if paired else 'WARN'}] command columns "
           f"{'match' if paired else 'DIFFER'} (max diff {md:.2e})")
-    print(f"[INFO] clean model={cm} k={ck} | noise model={nm} k={nk} | {n} episodes\n")
+    print(f"[INFO] clean=({clabel}) noise=({nlabel}) | {n} episodes\n")
 
     c, nz = derive(craw), derive(nraw)
     c_cm, n_cm = c["err_dist"] * 100, nz["err_dist"] * 100
@@ -100,7 +115,7 @@ def main():
 
     # (0,0) distance-error CDF
     a = ax[0, 0]
-    for arr, lab, col in [(c_cm, "clean", "C0"), (n_cm, f"{nm} k{nk}", "C3")]:
+    for arr, lab, col in [(c_cm, "clean", "C0"), (n_cm, nlabel, "C3")]:
         xs = np.sort(arr); ys = np.arange(1, len(xs)+1)/len(xs)
         a.plot(xs, ys, label=lab, color=col, linewidth=2)
     a.set_xlabel("distance error (cm)"); a.set_ylabel("cumulative fraction")
@@ -110,7 +125,7 @@ def main():
     a = ax[0, 1]
     bins = np.linspace(0, max(c_cm.max(), n_cm.max()), 30)
     a.hist(c_cm, bins=bins, alpha=0.6, label="clean", color="C0")
-    a.hist(n_cm, bins=bins, alpha=0.6, label=f"{nm} k{nk}", color="C3")
+    a.hist(n_cm, bins=bins, alpha=0.6, label=nlabel, color="C3")
     a.set_xlabel("distance error (cm)"); a.set_ylabel("episodes")
     a.set_title("Distance error distribution"); a.legend(); a.grid(alpha=0.3)
 
@@ -130,7 +145,7 @@ def main():
     a = ax[1, 1]
     ybins = np.linspace(0, max(c_deg.max(), n_deg.max()), 30)
     a.hist(c_deg, bins=ybins, alpha=0.6, label="clean", color="C0")
-    a.hist(n_deg, bins=ybins, alpha=0.6, label=f"{nm} k{nk}", color="C3")
+    a.hist(n_deg, bins=ybins, alpha=0.6, label=nlabel, color="C3")
     a.set_xlabel("|yaw| error (deg)"); a.set_ylabel("episodes")
     a.set_title("Yaw error distribution"); a.legend(); a.grid(alpha=0.3)
 

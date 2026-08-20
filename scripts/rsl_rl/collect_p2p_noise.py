@@ -195,9 +195,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     env_cfg.viewer.origin_type = "asset_root"
     env_cfg.viewer.asset_name = "robot"
-    # top-down view: camera directly above the robot, looking straight down
-    env_cfg.viewer.eye = (0.0, 0.0, 4.0)
-    env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
+    # angled follow view: better than top-down for seeing the robot stumble/tip
+    # under noise. Follows the robot (asset_root) so it stays in frame.
+    env_cfg.viewer.eye = (2.5, 2.5, 1.5)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.3)
 
     # ---- NOISE INJECTION ----
     # Both noise models are injected by corrupting the pose_commands buffer that
@@ -332,6 +333,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         normalizer = policy_nn.student_obs_normalizer
     else:
         normalizer = None
+
+    # Freeze network + normalizer running stats. Without this the empirical
+    # normalizer keeps updating across episodes, so by ~episode 84 the observation
+    # normalization has drifted and a hard command can fail -- exactly the
+    # multi-episode artifact seen before. eval() makes every episode normalize
+    # identically, matching an isolated single-episode run.
+    policy_nn.eval()
+    if normalizer is not None and hasattr(normalizer, "eval"):
+        normalizer.eval()
+    print("[INFO] policy + normalizer set to eval() (frozen running stats).")
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")

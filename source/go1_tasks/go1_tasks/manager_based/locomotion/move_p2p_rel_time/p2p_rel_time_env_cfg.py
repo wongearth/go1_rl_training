@@ -115,7 +115,9 @@ class Go1CommandsCfg:
             pos_x=(-1.5, 1.5),
             pos_y=(-1.5, 1.5),
             heading=(-3.14, 3.14),
-            time=(1.5, 4.0) # Timed goals!
+            # time=(1.5, 4.0) # Timed goals!
+            # time=(1.5, 3.0) # Timed goals!
+            time=(1.2, 2.5) # <--- The missing 5th dimension!
         )
     )
 
@@ -634,7 +636,9 @@ class Go1P2PRelTimeEnvCfg_PLAY(Go1P2PRelTimeEnvCfg):
                 pos_x=(-1.5, 1.5),
                 pos_y=(-1.5, 1.5),
                 heading=(-math.pi, math.pi),
-                time=(2.5, 4.0) # <--- The missing 5th dimension!
+                # time=(2.5, 4.0) # <--- The missing 5th dimension!
+                # time=(1.5, 3.0) # <--- The missing 5th dimension!
+                time=(1.2, 2.5) # <--- The missing 5th dimension!
             )
         )
 
