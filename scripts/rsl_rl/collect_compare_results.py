@@ -35,8 +35,12 @@ def load_results(path):
     with open(path, newline="") as f:
         r = csv.reader(f)
         header = next(r)
-        assert header == COLS, f"{path}: unexpected header {header}\nexpected {COLS}"
-        data = np.array([[float(x) for x in row] for row in r if row])
+        # Accept files that have the 7 core columns first, ignoring any extra
+        # trailing columns (e.g. noise metadata written by the noise collector).
+        if header[:len(COLS)] != COLS:
+            raise AssertionError(
+                f"{path}: unexpected header {header}\nexpected first columns {COLS}")
+        data = np.array([[float(x) for x in row[:len(COLS)]] for row in r if row])
     return data
 
 

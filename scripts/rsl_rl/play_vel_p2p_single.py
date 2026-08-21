@@ -58,6 +58,11 @@ parser.add_argument(
     help="How to output the per-episode error plot: 'save' writes PNG files (default, headless-safe), "
          "'live' shows an interactive updating window instead, 'both' does both."
 )
+parser.add_argument("--export_csv", type=str, default="",
+                    help="If set, write per-step time-series (episode, time, err_x/y/yaw, height, roll, pitch) to this CSV.")
+parser.add_argument("--ortho_size", type=float, default=0.0,
+                    help="If > 0, use an orthographic top-down camera with this vertical view span in meters "
+                         "(e.g. 3.0 tight on the robot, 12.0 wide). 0 = leave the perspective camera as-is.")
 # --- P2P-via-velocity specific args ---
 parser.add_argument("--target_time_range", type=float, nargs=2, default=[2.5, 4.0], help="Random per-episode time budget (s) for each cubic-spline reach; sampled uniformly.")
 parser.add_argument("--target_x_range", type=float, nargs=2, default=[-2.0, 2.0], help="Target x range (m, world/base-init frame).")
@@ -194,8 +199,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.viewer.origin_type = "world"
     # angled overhead view: high and back, looking at the origin where the robot
     # starts. Good for seeing the robot tip/fall (unlike pure top-down).
-    env_cfg.viewer.eye = (3.5, 3.5, 3.0)
-    env_cfg.viewer.lookat = (0.0, 0.0, 0.3)
+    env_cfg.viewer.eye = (0.0, 0.00, 10.0)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
+
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -218,6 +224,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+
+    # ==========================================================
+    # ORTHOGRAPHIC TOP-DOWN CAMERA (optional, --ortho_size > 0)
+    # Orthographic = zero perspective distortion; the robot stays the same
+    # apparent size regardless of distance, and ortho_size sets exactly how much
+    # ground is visible (the view limit). Small = zoomed in, still perfectly flat.
+    # ==========================================================
+    if args_cli.ortho_size and args_cli.ortho_size > 0.0:
+        try:
+            import omni.usd
+            from pxr import UsdGeom
+            stage = omni.usd.get_context().get_stage()
+            cam_path = "/OmniverseKit_Persp"
+            cam_prim = stage.GetPrimAtPath(cam_path)
+            if cam_prim and cam_prim.IsValid():
+                cam = UsdGeom.Camera(cam_prim)
+                cam.GetProjectionAttr().Set("orthographic")
+                cam.GetHorizontalApertureAttr().Set(args_cli.ortho_size * 10.0)
+                cam.GetVerticalApertureAttr().Set(args_cli.ortho_size * 10.0)
+                print(f"[CAMERA] Orthographic top-down set, view span = {args_cli.ortho_size} m")
+            else:
+                print(f"[CAMERA][WARN] camera prim {cam_path} not found; staying perspective.")
+        except Exception as e:
+            print(f"[CAMERA][WARN] could not set orthographic camera: {e}")
+    # ==========================================================
 
     # sanity: the velocity policy expects a base_velocity command term.
     try:
@@ -350,6 +381,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     current_episode_time = 0.0
     episode_count = 0
+
+    # optional per-step CSV export
+    csv_file = None
+    csv_writer = None
+    if args_cli.export_csv:
+        csv_file = open(args_cli.export_csv, "w", newline="")
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(["episode", "time_s", "err_x_cm", "err_y_cm", "err_yaw_deg",
+                             "height_cm", "roll_deg", "pitch_deg", "target_time_s"])
+        print(f"[CSV] exporting per-step data to {args_cli.export_csv}")
 
     # plot mode
     if args_cli.plot_mode in ("live", "both"):
@@ -561,6 +602,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         history_pitch.append(current_pitch * (180.0 / math.pi))
         history_time.append(current_episode_time)
 
+        # per-step CSV row
+        if csv_writer is not None:
+            csv_writer.writerow([
+                episode_count, f"{current_episode_time:.4f}",
+                f"{err_bx*100.0:.4f}", f"{err_by*100.0:.4f}", f"{yaw_err*(180.0/math.pi):.4f}",
+                f"{current_height*100.0:.4f}", f"{current_roll*(180.0/math.pi):.4f}",
+                f"{current_pitch*(180.0/math.pi):.4f}", f"{target_time:.4f}",
+            ])
+
         current_episode_time += dt
 
         # ---------- EPISODE END: fixed budget elapsed, or env terminated ----------
@@ -682,10 +732,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             tgt_err_y = None
             start_xy = robot.data.root_pos_w[0, :2].clone()
             ep_peak_cmd = 0.0
+            if csv_file is not None:
+                csv_file.flush()
 
         timestep += 1
 
     results_file.close()
+    if csv_file is not None:
+        csv_file.close()
+        print(f"[CSV] wrote {args_cli.export_csv}")
     print(f"[INFO]: Reached {timestep} steps -- exiting.")
 
     # close the simulator

@@ -1,0 +1,126 @@
+### Include all distances
+
+[OK] Commands match row-for-row (max diff 0.00e+00). Paired comparison valid.
+
+=== VELOCITY (cubic spline) : absolute error (100 episodes) ===
+metric               mean   median      std      p90      max
+dist err (cm)       11.32     9.63     7.56    24.39    31.93
+|x| err (cm)         8.23     6.25     7.42    18.81    31.60
+|y| err (cm)         6.01     4.46     5.15    13.30    24.37
+|yaw| err (deg)     12.69     3.07    19.09    44.31    85.05
+
+=== P2P (timed policy) : absolute error (100 episodes) ===
+metric               mean   median      std      p90      max
+dist err (cm)        1.87     1.75     1.03     3.30     4.85
+|x| err (cm)         1.09     1.00     0.71     2.02     3.09
+|y| err (cm)         1.44     1.38     0.88     2.54     4.56
+|yaw| err (deg)      0.39     0.36     0.24     0.71     1.10
+
+=== position error as %% of commanded distance (cmd_dist >= 0.3 m) ===
+  excluded 6/100 near-zero-distance episodes
+  VELOCITY : mean 12.7%%  median 11.5%%  p90 21.8%%
+  P2P      : mean 2.3%%  median 1.8%%  p90 4.7%%
+
+=== paired difference  (P2P - VELOCITY), negative => P2P better ===
+  dist err diff (cm): mean -9.46  median -7.89
+     P2P better in 96/100 episodes
+  yaw  err diff (deg): mean -12.29  median -2.51
+     P2P better in 91/100 episodes
+
+[plot] wrote compare_overview.png
+[plot] wrote compare_percentage.png
+
+
+
+### Exclude distance < 0.1
+=== VELOCITY (cubic spline) : absolute error (100 episodes) ===
+metric               mean   median      std      p90      max
+dist err (cm)       11.32     9.63     7.56    24.39    31.93
+|x| err (cm)         8.23     6.25     7.42    18.81    31.60
+|y| err (cm)         6.01     4.46     5.15    13.30    24.37
+|yaw| err (deg)     12.69     3.07    19.09    44.31    85.05
+
+=== P2P (timed policy) : absolute error (100 episodes) ===
+metric               mean   median      std      p90      max
+dist err (cm)        1.87     1.75     1.03     3.30     4.85
+|x| err (cm)         1.09     1.00     0.71     2.02     3.09
+|y| err (cm)         1.44     1.38     0.88     2.54     4.56
+|yaw| err (deg)      0.39     0.36     0.24     0.71     1.10
+
+=== position error as %% of commanded distance (cmd_dist >= 0.1 m) ===
+  excluded 1/100 near-zero-distance episodes
+  VELOCITY : mean 13.4%%  median 11.7%%  p90 22.3%%
+  P2P      : mean 2.5%%  median 1.9%%  p90 5.4%%
+
+=== paired difference  (P2P - VELOCITY), negative => P2P better ===
+  dist err diff (cm): mean -9.46  median -7.89
+     P2P better in 96/100 episodes
+  yaw  err diff (deg): mean -12.29  median -2.51
+     P2P better in 91/100 episodes
+
+[plot] wrote compare_overview.png
+[plot] wrote compare_percentage.png
+
+
+
+
+=== position error as %% of commanded distance (cmd_dist >= 0.2 m) ===
+  excluded 1/19 near-zero-distance episodes
+  VELOCITY : mean 13.5%%  median 11.8%%  p90 21.3%%
+  P2P      : mean 2.3%%  median 2.2%%  p90 4.7%%
+
+=== paired difference  (P2P - VELOCITY), negative => P2P better ===
+  dist err diff (cm): mean -9.70  median -9.38
+     P2P better in 18/19 episodes
+  yaw  err diff (deg): mean -9.93  median -1.69
+     P2P better in 17/19 episodes
+
+[plot] wrote compare_overview.png
+[plot] wrote compare_percentage.png
+
+
+(.env_isaac2_3_0) wong@wong-u24:~/go1_rl_training$ python scripts/rsl_rl/compare_noise.py --clean results_p2p_clean.csv --noise results_p2p_allsensors_k1.csv --out_prefix noise_allsensors_k1
+[OK] command columns match (max diff 0.00e+00)
+[INFO] clean=(clean) noise=(all sk1) | 100 episodes
+
+=== absolute accuracy ===
+  CLEAN    dist(cm): mean 1.87 median 1.75 p90 3.30 max 4.85 | yaw(deg): mean 0.39 median 0.36
+  NOISE    dist(cm): mean 1.87 median 1.50 p90 3.35 max 5.34 | yaw(deg): mean 0.18 median 0.15
+
+=== paired degradation (noise - clean), positive => noise worse ===
+  dist (cm): mean +0.01 median -0.02 | noise worse in 48/100
+  yaw (deg): mean -0.22 median -0.23 | noise worse in 24/100
+
+[plot] wrote noise_allsensors_k1.png
+
+
+
+[OK] command columns match (max diff 0.00e+00)
+[INFO] clean=(clean) noise=(all sk2) | 100 episodes
+
+=== absolute accuracy ===
+  CLEAN    dist(cm): mean 1.87 median 1.75 p90 3.30 max 4.85 | yaw(deg): mean 0.39 median 0.36
+  NOISE    dist(cm): mean 2.54 median 2.20 p90 3.75 max 4.84 | yaw(deg): mean 0.90 median 0.60
+
+=== paired degradation (noise - clean), positive => noise worse ===
+  dist (cm): mean +0.67 median +0.59 | noise worse in 90/100
+  yaw (deg): mean +0.51 median +0.33 | noise worse in 64/100
+
+[plot] wrote noise_allsensors_k2.png
+
+
+[OK] command columns match (max diff 0.00e+00)
+[INFO] clean=(clean) noise=(all sk3) | 100 episodes
+
+=== absolute accuracy ===
+  CLEAN    dist(cm): mean 1.87 median 1.75 p90 3.30 max 4.85 | yaw(deg): mean 0.39 median 0.36
+  NOISE    dist(cm): mean 3.23 median 2.87 p90 3.69 max 27.45 | yaw(deg): mean 1.98 median 1.12
+
+=== paired degradation (noise - clean), positive => noise worse ===
+  dist (cm): mean +1.37 median +1.04 | noise worse in 81/100
+  yaw (deg): mean +1.59 median +0.78 | noise worse in 80/100
+
+[plot] wrote noise_allsensors_k3.png
+
+
+
