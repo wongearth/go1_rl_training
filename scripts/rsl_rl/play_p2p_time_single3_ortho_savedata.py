@@ -412,6 +412,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                              "noise_model", "noise_k", "sensor_noise", "sensor_k"])
         print(f"[CSV] exporting per-step data to {args_cli.export_csv}")
 
+    # Also auto-save the per-episode commands (targets) alongside the export CSV
+    # so they can be fed to the velocity script for a matched comparison.
+    # Writes to <export_csv_stem>_commands.csv in the same directory.
+    cmd_csv_file = None
+    cmd_csv_writer = None
+    if args_cli.export_csv:
+        cmd_csv_path = os.path.splitext(args_cli.export_csv)[0] + "_commands.csv"
+        cmd_csv_file = open(cmd_csv_path, "w", newline="")
+        cmd_csv_writer = csv.writer(cmd_csv_file)
+        cmd_csv_writer.writerow(["cmd_x", "cmd_y", "cmd_yaw", "target_time"])
+        print(f"[CSV] saving per-episode commands to {cmd_csv_path}")
+
     # reset environment
     obs = env.get_observations()
     timestep = 0
@@ -565,6 +577,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 print(f"  -> Target Yaw: {absolute_target_yaw[0].item()/np.pi*180:.4f} deg")
                 print(f"  -> target_quat_w: {[round(val, 4) for val in target_quat_w[0].tolist()]}\n")
 
+                # save this episode's command (base-frame relative target) so it can
+                # be replayed by the velocity script for a matched comparison.
+                if cmd_csv_writer is not None:
+                    _dx = cmd[0, 0].item()
+                    _dy = cmd[0, 1].item()
+                    _dyaw = cmd[0, 3].item()
+                    _tt = cmd[0, 4].item()
+                    cmd_csv_writer.writerow([f"{_dx:.6f}", f"{_dy:.6f}", f"{_dyaw:.6f}", f"{_tt:.6f}"])
+                    cmd_csv_file.flush()
+
                 target_frame_marker.visualize(target_pos_w, target_quat_w)
                 update_marker = False
             # ==========================================================
@@ -698,6 +720,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if csv_file is not None:
         csv_file.close()
         print(f"[CSV] wrote {args_cli.export_csv}")
+    if cmd_csv_file is not None:
+        cmd_csv_path = os.path.splitext(args_cli.export_csv)[0] + "_commands.csv"
+        cmd_csv_file.close()
+        print(f"[CSV] wrote {cmd_csv_path}")
 
     # close the simulator
     env.close()

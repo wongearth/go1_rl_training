@@ -87,6 +87,11 @@ parser.add_argument("--once", action="store_true", default=False,
 parser.add_argument("--append", action="store_true", default=False,
                     help="Append to --results_csv instead of overwriting (write header only if file is new). "
                          "Lets many --once runs accumulate into one results file.")
+parser.add_argument("--random_targets", action="store_true", default=False,
+                    help="Sample targets randomly from the ranges (seeded by --seed) instead of reading "
+                         "--commands_csv. Like the P2P play script's default behavior.")
+parser.add_argument("--target_seed", type=int, default=42,
+                    help="RNG seed for --random_targets (change for a different sequence).")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -392,6 +397,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                              "height_cm", "roll_deg", "pitch_deg", "target_time_s"])
         print(f"[CSV] exporting per-step data to {args_cli.export_csv}")
 
+    # Auto-save the per-episode commands alongside the export CSV so the P2P
+    # script can replay the exact same targets for a matched comparison.
+    cmd_csv_file = None
+    cmd_csv_writer = None
+    if args_cli.export_csv:
+        cmd_csv_path = os.path.splitext(args_cli.export_csv)[0] + "_commands.csv"
+        cmd_csv_file = open(cmd_csv_path, "w", newline="")
+        cmd_csv_writer = csv.writer(cmd_csv_file)
+        cmd_csv_writer.writerow(["cmd_x", "cmd_y", "cmd_yaw", "target_time"])
+        print(f"[CSV] saving per-episode commands to {cmd_csv_path}")
+
     # plot mode
     if args_cli.plot_mode in ("live", "both"):
         try:
@@ -410,15 +426,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # ==========================================================
     hold_time = float(args_cli.hold_time)
 
-    # load the SHARED command set (create seeded file if missing). Episode i uses
-    # row i -> identical targets across the velocity and P2P runs.
-    # When looping a single episode, we only need enough rows to reach that index,
-    # so don't demand the full num_episodes count.
-    # how many rows to require/load:
-    #  --play_episode N : just enough to reach row N
-    #  --cycle          : ALL rows in the file (load the whole thing directly)
-    #  neither          : num_episodes
-    if args_cli.cycle:
+    # ---- TARGET SOURCE ----
+    # --random_targets: sample from the ranges with a seeded RNG (like P2P play).
+    # otherwise: read from --commands_csv (shared, reproducible).
+    target_rng = None
+    commands = None
+    if args_cli.random_targets:
+        target_rng = np.random.default_rng(int(args_cli.target_seed))
+        print(f"[TARGETS] random mode, seed={args_cli.target_seed} "
+              f"(change --seed for a different sequence)")
+    elif args_cli.cycle:
         from generate_commands import load_commands_csv
         if not os.path.exists(args_cli.commands_csv):
             raise RuntimeError(f"[cycle] {args_cli.commands_csv} does not exist. "
@@ -459,15 +476,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         _, _, yaw_now_t = euler_xyz_from_quat(quat_now.unsqueeze(0))
         yaw_now = float(yaw_now_t[0].item())
 
-        # ---- read the shared command row for THIS episode ----
-        # --play_episode N pins to row N (loops it). Otherwise cycle through all
-        # rows in order, wrapping back to 0 at the end.
-        if args_cli.play_episode is not None:
-            row_idx = args_cli.play_episode
+        # ---- choose this episode's target ----
+        if target_rng is not None:
+            # random_targets mode: sample from the ranges
+            dx_b = float(target_rng.uniform(*args_cli.target_x_range))
+            dy_b = float(target_rng.uniform(*args_cli.target_y_range))
+            dyaw = float(target_rng.uniform(*args_cli.target_yaw_range))
+            target_time = float(target_rng.uniform(*args_cli.target_time_range))
+            print(f"[TARGET] random ep{episode_count}: dx={dx_b:.2f} dy={dy_b:.2f} "
+                  f"dyaw={math.degrees(dyaw):.0f}deg T={target_time:.2f}s")
         else:
-            row_idx = episode_count % len(commands)
-        dx_b, dy_b, dyaw, target_time = commands[row_idx]
-        print(f"[CYCLE] playing row {row_idx} of {len(commands)}")
+            # CSV mode
+            if args_cli.play_episode is not None:
+                row_idx = args_cli.play_episode
+            else:
+                row_idx = episode_count % len(commands)
+            dx_b, dy_b, dyaw, target_time = commands[row_idx]
+            print(f"[CYCLE] playing row {row_idx} of {len(commands)}")
+
+        # auto-save the command used (for paired comparison with the other script)
+        if cmd_csv_writer is not None:
+            cmd_csv_writer.writerow([f"{dx_b:.6f}", f"{dy_b:.6f}", f"{dyaw:.6f}", f"{target_time:.6f}"])
+            cmd_csv_file.flush()
 
         # rotate base-frame offset into world
         cos_y, sin_y = math.cos(yaw_now), math.sin(yaw_now)
@@ -741,6 +771,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if csv_file is not None:
         csv_file.close()
         print(f"[CSV] wrote {args_cli.export_csv}")
+    if cmd_csv_file is not None:
+        cmd_csv_path = os.path.splitext(args_cli.export_csv)[0] + "_commands.csv"
+        cmd_csv_file.close()
+        print(f"[CSV] wrote {cmd_csv_path}")
     print(f"[INFO]: Reached {timestep} steps -- exiting.")
 
     # close the simulator
