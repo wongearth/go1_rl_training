@@ -1,34 +1,4 @@
-### Include all distances
 
-[OK] Commands match row-for-row (max diff 0.00e+00). Paired comparison valid.
-
-=== VELOCITY (cubic spline) : absolute error (100 episodes) ===
-metric               mean   median      std      p90      max
-dist err (cm)       11.32     9.63     7.56    24.39    31.93
-|x| err (cm)         8.23     6.25     7.42    18.81    31.60
-|y| err (cm)         6.01     4.46     5.15    13.30    24.37
-|yaw| err (deg)     12.69     3.07    19.09    44.31    85.05
-
-=== P2P (timed policy) : absolute error (100 episodes) ===
-metric               mean   median      std      p90      max
-dist err (cm)        1.87     1.75     1.03     3.30     4.85
-|x| err (cm)         1.09     1.00     0.71     2.02     3.09
-|y| err (cm)         1.44     1.38     0.88     2.54     4.56
-|yaw| err (deg)      0.39     0.36     0.24     0.71     1.10
-
-=== position error as %% of commanded distance (cmd_dist >= 0.3 m) ===
-  excluded 6/100 near-zero-distance episodes
-  VELOCITY : mean 12.7%%  median 11.5%%  p90 21.8%%
-  P2P      : mean 2.3%%  median 1.8%%  p90 4.7%%
-
-=== paired difference  (P2P - VELOCITY), negative => P2P better ===
-  dist err diff (cm): mean -9.46  median -7.89
-     P2P better in 96/100 episodes
-  yaw  err diff (deg): mean -12.29  median -2.51
-     P2P better in 91/100 episodes
-
-[plot] wrote compare_overview.png
-[plot] wrote compare_percentage.png
 
 
 
@@ -124,3 +94,12 @@ dist err (cm)        1.87     1.75     1.03     3.30     4.85
 
 
 
+[INFO] clean=(clean) noise=(drift k2) | 100 episodes
+
+=== absolute accuracy ===
+  CLEAN    dist(cm): mean 1.87 median 1.75 p90 3.30 max 4.85 | yaw(deg): mean 0.39 median 0.36
+  NOISE    dist(cm): mean 4.72 median 4.69 p90 8.33 max 10.00 | yaw(deg): mean 1.69 median 1.37
+
+=== paired degradation (noise - clean), positive => noise worse ===
+  dist (cm): mean +2.85 median +2.32 | noise worse in 86/100
+  yaw (deg): mean +1.30 median +1.01 | noise worse in 84/100

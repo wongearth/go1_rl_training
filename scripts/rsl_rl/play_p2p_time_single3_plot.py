@@ -175,6 +175,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
+
+    # --- TEMP: dump joint order + gains, then you can Ctrl-C ---
+    robot = env.unwrapped.scene["robot"]
+    print("\n[JOINT ORDER]:", robot.joint_names)
+    print("[DEFAULT q]:", robot.data.default_joint_pos[0].tolist())
+    # actuator gains
+    for name, act in robot.actuators.items():
+        print(f"[ACTUATOR] {name}: kp={act.stiffness}, kd={act.damping}")
+
+
+
+
     print("CONTACT SENSOR BODY ORDER:", env.unwrapped.scene.sensors["contact_forces"].body_names)
 
     # convert to single-agent instance if required by the RL algorithm

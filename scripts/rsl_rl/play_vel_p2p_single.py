@@ -92,6 +92,9 @@ parser.add_argument("--random_targets", action="store_true", default=False,
                          "--commands_csv. Like the P2P play script's default behavior.")
 parser.add_argument("--target_seed", type=int, default=42,
                     help="RNG seed for --random_targets (change for a different sequence).")
+parser.add_argument("--ts_episode", type=int, default=None,
+                    help="If set, ONLY save timeseries data for this specific episode index (prevents giant CSVs).")
+
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -383,6 +386,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     history_roll = []     # actual body roll (deg)
     history_pitch = []    # actual body pitch (deg)
     history_time = []
+    history_vx = []
+    history_vy = []
+    history_vz = []
+    history_wx = []
+    history_wy = []
+    history_wz = []
 
     current_episode_time = 0.0
     episode_count = 0
@@ -393,8 +402,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.export_csv:
         csv_file = open(args_cli.export_csv, "w", newline="")
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(["episode", "time_s", "err_x_cm", "err_y_cm", "err_yaw_deg",
-                             "height_cm", "roll_deg", "pitch_deg", "target_time_s"])
+        csv_writer.writerow([
+            "episode", "time_s", "target_time_s", 
+            "err_x_cm", "err_y_cm", "err_yaw_deg", 
+            "pos_x", "pos_y", "pos_z", 
+            "roll_deg", "pitch_deg", "yaw_deg", 
+            "vx", "vy", "vz", "wx", "wy", "wz"
+        ])
         print(f"[CSV] exporting per-step data to {args_cli.export_csv}")
 
     # Auto-save the per-episode commands alongside the export CSV so the P2P
@@ -631,15 +645,40 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         history_roll.append(current_roll * (180.0 / math.pi))
         history_pitch.append(current_pitch * (180.0 / math.pi))
         history_time.append(current_episode_time)
+        history_vx.append(robot.data.root_lin_vel_b[0, 0].item()* 100.0)
+        history_vy.append(robot.data.root_lin_vel_b[0, 1].item()* 100.0)
+        history_vz.append(robot.data.root_lin_vel_b[0, 2].item()* 100.0)
+        history_wx.append(robot.data.root_ang_vel_b[0, 0].item()* (180.0 / math.pi))
+        history_wy.append(robot.data.root_ang_vel_b[0, 1].item()* (180.0 / math.pi))
+        history_wz.append(robot.data.root_ang_vel_b[0, 2].item()* (180.0 / math.pi))
 
         # per-step CSV row
+        # ---------- CONDITIONAL PER-STEP CSV EXPORT ----------
         if csv_writer is not None:
-            csv_writer.writerow([
-                episode_count, f"{current_episode_time:.4f}",
-                f"{err_bx*100.0:.4f}", f"{err_by*100.0:.4f}", f"{yaw_err*(180.0/math.pi):.4f}",
-                f"{current_height*100.0:.4f}", f"{current_roll*(180.0/math.pi):.4f}",
-                f"{current_pitch*(180.0/math.pi):.4f}", f"{target_time:.4f}",
-            ])
+            # Only write if no specific episode was requested, OR if it matches the current episode
+            if args_cli.ts_episode is None or episode_count == args_cli.ts_episode:
+                # Extract global position
+                pos_x = robot.data.root_pos_w[0, 0].item()
+                pos_y = robot.data.root_pos_w[0, 1].item()
+                pos_z = robot.data.root_pos_w[0, 2].item()
+                
+                # Extract local base velocities
+                vx = robot.data.root_lin_vel_b[0, 0].item()
+                vy = robot.data.root_lin_vel_b[0, 1].item()
+                vz = robot.data.root_lin_vel_b[0, 2].item()
+                wx = robot.data.root_ang_vel_b[0, 0].item()
+                wy = robot.data.root_ang_vel_b[0, 1].item()
+                wz = robot.data.root_ang_vel_b[0, 2].item()
+
+                csv_writer.writerow([
+                    # episode_count, f"{current_episode_time:.4f}", f"{target_time:.4f}",
+                    args_cli.play_episode if args_cli.play_episode is not None else episode_count, f"{current_episode_time:.4f}", f"{target_time:.4f}",
+                    f"{err_bx*100.0:.4f}", f"{err_by*100.0:.4f}", f"{yaw_err*(180.0/math.pi):.4f}",
+                    f"{pos_x:.4f}", f"{pos_y:.4f}", f"{pos_z:.4f}",
+                    f"{current_roll*(180.0/math.pi):.4f}", f"{current_pitch*(180.0/math.pi):.4f}", f"{yaw_now*(180.0/math.pi):.4f}",
+                    f"{vx:.4f}", f"{vy:.4f}", f"{vz:.4f}", 
+                    f"{wx:.4f}", f"{wy:.4f}", f"{wz:.4f}"
+                ])
 
         current_episode_time += dt
 

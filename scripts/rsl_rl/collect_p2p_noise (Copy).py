@@ -73,6 +73,21 @@ parser.add_argument("--drift_yaw_per_s", type=float, default=0.009,
                     help="Drift random-walk std-dev (rad per sqrt-second) for heading in 'drift' model at k=1 (~0.5deg).")
 parser.add_argument("--noise_seed", type=int, default=0,
                     help="Seed for the noise RNG (kept SEPARATE from command sampling so clean/noised share commands).")
+# --- proprioceptive sensor noise (extra noise on base_lin_vel / base_ang_vel /
+#     projected_gravity, on TOP of the trained-in Unoise). Applied via Isaac obs
+#     noise at the correct pipeline point. Independent of the pose-error noise. ---
+parser.add_argument("--sensor_noise", type=str, default="",
+                    help="Comma-separated channels to add EXTRA Gaussian noise to: any of "
+                         "'lin_vel','ang_vel','gravity','all'. Empty = none. "
+                         "Example: --sensor_noise lin_vel,ang_vel  or  --sensor_noise all")
+parser.add_argument("--sensor_k", type=float, default=1.0,
+                    help="Scale on the per-channel sensor sigmas below (0 disables).")
+parser.add_argument("--sigma_lin_vel", type=float, default=0.1,
+                    help="Extra std (m/s) on base_lin_vel at sensor_k=1 (default 0.1, matches trained Unoise range).")
+parser.add_argument("--sigma_ang_vel", type=float, default=0.2,
+                    help="Extra std (rad/s) on base_ang_vel at sensor_k=1 (default 0.2).")
+parser.add_argument("--sigma_gravity", type=float, default=0.05,
+                    help="Extra std on projected_gravity at sensor_k=1 (default 0.05).")
 # --- single-process collection (the verified-reliable path) ---
 parser.add_argument("--play_episode", type=int, default=None,
                     help="Play ONLY this row index once and exit (use in a shell loop, one fresh process per episode).")
@@ -180,9 +195,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     env_cfg.viewer.origin_type = "asset_root"
     env_cfg.viewer.asset_name = "robot"
-    # top-down view: camera directly above the robot, looking straight down
-    env_cfg.viewer.eye = (0.0, 0.0, 4.0)
-    env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
+    # angled follow view: better than top-down for seeing the robot stumble/tip
+    # under noise. Follows the robot (asset_root) so it stays in frame.
+    env_cfg.viewer.eye = (2.5, 2.5, 1.5)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.3)
 
     # ---- NOISE INJECTION ----
     # Both noise models are injected by corrupting the pose_commands buffer that
@@ -194,6 +210,55 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # per-step jitter + an accumulating random-walk bias.
     print(f"[NOISE] model={args_cli.noise_model} k={args_cli.noise_k} "
           f"sigma_xy={args_cli.sigma_xy} sigma_yaw={args_cli.sigma_yaw}")
+
+    # ---- EXTRA PROPRIOCEPTIVE SENSOR NOISE ----
+    # Add Gaussian noise on top of the trained-in Unoise for selected channels,
+    # via Isaac's obs-noise config (correct pipeline point; enable_corruption is
+    # already True in PolicyCfg). This is independent of the pose-error noise and
+    # lets you test which sensor the policy is most sensitive to.
+    if args_cli.sensor_noise.strip() and args_cli.sensor_k > 0.0:
+        try:
+            from isaaclab.utils.noise import GaussianNoiseCfg
+            chans = {c.strip() for c in args_cli.sensor_noise.split(",") if c.strip()}
+            if "all" in chans:
+                chans = {"lin_vel", "ang_vel", "gravity"}
+            pol = env_cfg.observations.policy
+            k = args_cli.sensor_k
+            applied = []
+            # NOTE: adding a `noise` here REPLACES the term's existing Unoise. To
+            # keep the trained-in noise AND add ours we widen the std to the
+            # combined level (trained range treated as ~uniform half-width).
+            if "lin_vel" in chans:
+                pol.base_lin_vel.noise = GaussianNoiseCfg(mean=0.0, std=args_cli.sigma_lin_vel * k)
+                applied.append(f"lin_vel std={args_cli.sigma_lin_vel*k:.3f}")
+            if "ang_vel" in chans:
+                pol.base_ang_vel.noise = GaussianNoiseCfg(mean=0.0, std=args_cli.sigma_ang_vel * k)
+                applied.append(f"ang_vel std={args_cli.sigma_ang_vel*k:.3f}")
+            if "gravity" in chans:
+                pol.projected_gravity.noise = GaussianNoiseCfg(mean=0.0, std=args_cli.sigma_gravity * k)
+                applied.append(f"gravity std={args_cli.sigma_gravity*k:.3f}")
+            print(f"[SENSOR-NOISE] applied to: {', '.join(applied) if applied else '(none matched)'}")
+            if not applied:
+                print(f"[SENSOR-NOISE][WARN] no known channels in {chans}; "
+                      f"valid: lin_vel, ang_vel, gravity, all")
+        except Exception as e:
+            print(f"[SENSOR-NOISE][WARN] could not attach sensor noise: {e}")
+    else:
+        print("[SENSOR-NOISE] none")
+
+    # CRITICAL: the _PLAY config variant usually disables observation corruption
+    # for clean playback (enable_corruption=False), which makes ALL obs noise
+    # inert -- both the trained-in Unoise AND anything we attach. Force it on when
+    # we actually want noise, so the injected sensor noise reaches the policy.
+    try:
+        prev = env_cfg.observations.policy.enable_corruption
+        want_corruption = bool(args_cli.sensor_noise.strip()) and args_cli.sensor_k > 0.0
+        if want_corruption:
+            env_cfg.observations.policy.enable_corruption = True
+        print(f"[SENSOR-NOISE] enable_corruption was {prev} -> "
+              f"{env_cfg.observations.policy.enable_corruption}")
+    except Exception as e:
+        print(f"[SENSOR-NOISE][WARN] could not read/set enable_corruption: {e}")
 
 
     # specify directory for logging experiments
@@ -268,6 +333,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         normalizer = policy_nn.student_obs_normalizer
     else:
         normalizer = None
+
+    # Freeze network + normalizer running stats. Without this the empirical
+    # normalizer keeps updating across episodes, so by ~episode 84 the observation
+    # normalization has drifted and a hard command can fail -- exactly the
+    # multi-episode artifact seen before. eval() makes every episode normalize
+    # identically, matching an isolated single-episode run.
+    policy_nn.eval()
+    if normalizer is not None and hasattr(normalizer, "eval"):
+        normalizer.eval()
+    print("[INFO] policy + normalizer set to eval() (frozen running stats).")
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
@@ -358,7 +433,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if write_header:
         results_writer.writerow(["cmd_x", "cmd_y", "cmd_yaw", "target_time",
                                  "err_x", "err_y", "err_yaw",
-                                 "noise_model", "noise_k"])
+                                 "vel_x", "vel_y", "vel_yaw",
+                                 "noise_model", "noise_k",
+                                 "sensor_noise", "sensor_k"])
     print(f"[INFO] {'Appending' if args_cli.append else 'Writing'} per-episode results to: {args_cli.results_csv}")
 
     cmd_term = env.unwrapped.command_manager.get_term("base_pose")
@@ -519,6 +596,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             current_roll, current_pitch, _ = euler_xyz_from_quat(robot_asset.data.root_quat_w)
             current_roll = current_roll[0].item()
             current_pitch = current_pitch[0].item()
+
+            last_vel_x = robot_asset.data.root_lin_vel_b[0, 0].item()
+            last_vel_y = robot_asset.data.root_lin_vel_b[0, 1].item()
+            last_vel_yaw = robot_asset.data.root_ang_vel_b[0, 2].item()
             # ==========================================================
 
             # 3. Step the environment
@@ -595,7 +676,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 results_writer.writerow([
                     f"{cmd_x:.6f}", f"{cmd_y:.6f}", f"{cmd_yaw:.6f}", f"{cmd_T:.6f}",
                     f"{last_err_x:.6f}", f"{last_err_y:.6f}", f"{last_err_yaw:.6f}",
+                    f"{last_vel_x:.6f}", f"{last_vel_y:.6f}", f"{last_vel_yaw:.6f}",
                     args_cli.noise_model, f"{args_cli.noise_k:.3f}",
+                    args_cli.sensor_noise if args_cli.sensor_noise.strip() else "none",
+                    f"{args_cli.sensor_k:.3f}",
                 ])
                 results_file.flush()
 

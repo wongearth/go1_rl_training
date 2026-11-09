@@ -395,6 +395,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
     current_episode_time = 0.0
+    captured_at_target = False
+    tgt_err_x = tgt_err_y = tgt_err_yaw = 0.0
+    tgt_vel_x = tgt_vel_y = tgt_vel_yaw = 0.0
+
     # in single-episode mode, start at the requested row so commands[episode_count]
     # and inject_target(episode_count) select the correct target.
     episode_count = args_cli.play_episode if args_cli.play_episode is not None else 0
@@ -433,6 +437,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if write_header:
         results_writer.writerow(["cmd_x", "cmd_y", "cmd_yaw", "target_time",
                                  "err_x", "err_y", "err_yaw",
+                                 "vel_x", "vel_y", "vel_yaw",
                                  "noise_model", "noise_k",
                                  "sensor_noise", "sensor_k"])
     print(f"[INFO] {'Appending' if args_cli.append else 'Writing'} per-episode results to: {args_cli.results_csv}")
@@ -445,7 +450,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # ---- noise machinery ----
     dev = cmd_term.device
     noise_rng = torch.Generator(device=dev)
-    noise_rng.manual_seed(int(args_cli.noise_seed))
+    # noise_rng.manual_seed(int(args_cli.noise_seed))
+    noise_rng.manual_seed(int(args_cli.noise_seed) + episode_count)
+
     # per-channel std at the requested k (0 => clean)
     sig_xy = args_cli.sigma_xy * args_cli.noise_k
     sig_yaw = args_cli.sigma_yaw * args_cli.noise_k
@@ -557,6 +564,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # at-target-time capture (P2P episode ends AT target time, so the last
     # pre-done error IS the at-target error)
     last_err_x = last_err_y = last_err_yaw = 0.0
+    captured_at_target = False
+    tgt_vel_x = tgt_vel_y = tgt_vel_yaw = 0.0
 
     # Simulate environment
     while simulation_app.is_running() and timestep < max_steps:
@@ -573,28 +582,34 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = policy(obs)
 
             # ==========================================================
-            # 2. CAPTURE ERROR *BEFORE* STEP/RESET, from the CLEAN ground-truth
-            # source (NOT the noised buffer). This is what we score against.
+            # 2. CAPTURE ERROR *BEFORE* STEP/RESET (CLEAN GROUND TRUTH)
             # ==========================================================
             cx, cy, cyaw = clean_error()
             final_dist = math.hypot(cx, cy)
-            last_err_x = cx
-            last_err_y = cy
             final_yaw = cyaw
-            last_err_yaw = cyaw
             target_time = float(cmd_term._command[0, 4].item())
 
-            # ==========================================================
-            # CAPTURE ACTUAL BODY STATE (height, roll, pitch) -- these
-            # aren't command errors like X/Y/yaw (there's no roll/pitch/height
-            # target in this task), they're the robot's real orientation and
-            # height, useful for seeing things like body sag or excessive roll.
-            # ==========================================================
             robot_asset = env.unwrapped.scene["robot"]
+            
+            # CAPTURE EXACTLY AT TARGET TIME
+            if (not captured_at_target) and (current_episode_time >= target_time):
+                last_err_x = cx
+                last_err_y = cy
+                last_err_yaw = cyaw
+                tgt_vel_x = robot_asset.data.root_lin_vel_b[0, 0].item()
+                tgt_vel_y = robot_asset.data.root_lin_vel_b[0, 1].item()
+                tgt_vel_yaw = robot_asset.data.root_ang_vel_b[0, 2].item()
+                captured_at_target = True
+
+            # CAPTURE ACTUAL BODY STATE (height, roll, pitch)
             current_height = robot_asset.data.root_pos_w[0, 2].item()
             current_roll, current_pitch, _ = euler_xyz_from_quat(robot_asset.data.root_quat_w)
             current_roll = current_roll[0].item()
             current_pitch = current_pitch[0].item()
+
+            last_vel_x = robot_asset.data.root_lin_vel_b[0, 0].item()
+            last_vel_y = robot_asset.data.root_lin_vel_b[0, 1].item()
+            last_vel_yaw = robot_asset.data.root_ang_vel_b[0, 2].item()
             # ==========================================================
 
             # 3. Step the environment
@@ -671,6 +686,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 results_writer.writerow([
                     f"{cmd_x:.6f}", f"{cmd_y:.6f}", f"{cmd_yaw:.6f}", f"{cmd_T:.6f}",
                     f"{last_err_x:.6f}", f"{last_err_y:.6f}", f"{last_err_yaw:.6f}",
+                    f"{tgt_vel_x:.6f}", f"{tgt_vel_y:.6f}", f"{tgt_vel_yaw:.6f}",
                     args_cli.noise_model, f"{args_cli.noise_k:.3f}",
                     args_cli.sensor_noise if args_cli.sensor_noise.strip() else "none",
                     f"{args_cli.sensor_k:.3f}",
@@ -737,6 +753,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 history_pitch.clear()
                 history_time.clear()
                 current_episode_time = 0.0
+                captured_at_target = False
 
                 update_marker = True
 
