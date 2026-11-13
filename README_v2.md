@@ -163,6 +163,9 @@ python scripts/rsl_rl/play_p2p_time_single3_ortho_savedata.py  \
   --num_envs 1 \
   --plot_mode live
 
+tensorboard --logdir logs/rsl_rl/go1_p2p_rel_time_rough
+
+
 # clean, watch + export
 python scripts/rsl_rl/play_p2p_time_single3_ortho_savedata.py --task Isaac-Go1-P2P_Rel_Time-Play-v0 --export_csv data_01_clean.csv
 
@@ -279,7 +282,7 @@ python scripts/rsl_rl/train.py \
 python scripts/rsl_rl/train.py \
   --task Isaac-MC-P2P_Rel_Time-v0 \
   --num_envs 4096 --headless \
-  --max_iterations 2000
+  --max_iterations 5000
 
 python scripts/rsl_rl/play_p2p.py  \
   --task Isaac-MC-P2P_Rel_Time-Play-v0  \

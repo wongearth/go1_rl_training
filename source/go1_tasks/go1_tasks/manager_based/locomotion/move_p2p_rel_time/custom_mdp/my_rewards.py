@@ -196,58 +196,109 @@ def time_remaining_normalized(env, command_name: str) -> torch.Tensor:
     t_rem = torch.clamp(target_time - t_elapsed, min=0.0) / target_time
     return t_rem.unsqueeze(1)
 
-def track_timed_trajectory_local_exp(
-    env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std: float = 1.0,
+# def track_timed_trajectory_local_exp(
+#     env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std: float = 1.0,
+# ) -> torch.Tensor:
+#     """Reward: Forces robot to match the exact velocity needed to reach the target precisely on time."""
+#     asset = env.scene[asset_cfg.name]
+#     command = env.command_manager.get_command(command_name)
+    
+#     target_time = command[:, 4]
+#     t_elapsed = env.episode_length_buf * env.step_dt
+#     t_remaining = torch.clamp(target_time - t_elapsed, min=0.1) 
+    
+#     # 1. The Desired Velocity is simply the remaining local distance divided by remaining time
+#     local_pos_error = command[:, :2]
+#     is_active = (t_elapsed < target_time).unsqueeze(1)
+    
+#     desired_vel_b = torch.where(
+#         is_active, 
+#         local_pos_error / t_remaining.unsqueeze(1), 
+#         torch.zeros_like(local_pos_error) # If time is up, desire 0 velocity (park)
+#     )
+    
+#     # 2. Actual Velocity in the robot's base frame
+#     yaw_q = yaw_quat(asset.data.root_quat_w)
+#     actual_vel_b = quat_apply_inverse(yaw_q, asset.data.root_lin_vel_w)[:, :2]
+    
+#     vel_error = torch.sum(torch.square(desired_vel_b - actual_vel_b), dim=1)
+#     return torch.exp(-vel_error / std**2)
+
+# def track_timed_trajectory_local_exp_v2(
+#     env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std: float = 1.0,
+# ) -> torch.Tensor:
+#     """Reward: Forces robot to pace itself, followed by a smooth, monotonic deceleration to zero."""
+#     asset = env.scene[asset_cfg.name]
+#     command = env.command_manager.get_command(command_name)
+    
+#     target_time = command[:, 4]
+#     t_elapsed = env.episode_length_buf * env.step_dt
+#     t_remaining = torch.clamp(target_time - t_elapsed, min=0.1) 
+    
+#     local_pos_error = command[:, :2]
+#     distance = torch.norm(local_pos_error, dim=1, keepdim=True)
+    
+#     # 1. Check if the timer is still running
+#     is_active = (t_elapsed < target_time).unsqueeze(1)
+    
+#     # 2. Cruise Phase vs Braking Phase
+#     # Cruise: standard time-based pacing
+#     cruise_vel = local_pos_error / t_remaining.unsqueeze(1)
+    
+#     # Brake: proportional to distance (Kd). Creates a monotonic exponential decay to 0 m/s
+#     brake_vel = local_pos_error * 4.0 
+    
+#     # Activate braking automatically when within 30cm of the target
+#     is_braking = (distance < 0.30)
+    
+#     # 3. Blend the trajectory profile
+#     desired_vel_b = torch.where(
+#         is_active, 
+#         torch.where(is_braking, brake_vel, cruise_vel), # Smooth deceleration when close
+#         torch.zeros_like(local_pos_error) # Strictly 0.0 for ALL steps after time is up
+#     )
+    
+#     # 4. Actual Velocity in the robot's base frame
+#     yaw_q = yaw_quat(asset.data.root_quat_w)
+#     actual_vel_b = quat_apply_inverse(yaw_q, asset.data.root_lin_vel_w)[:, :2]
+    
+#     vel_error = torch.sum(torch.square(desired_vel_b - actual_vel_b), dim=1)
+#     return torch.exp(-vel_error / std**2)
+
+def track_spline_trajectory_local_exp_v3(
+    env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std: float = 0.5,
 ) -> torch.Tensor:
-    """Reward: Forces robot to match the exact velocity needed to reach the target precisely on time."""
+    """Reward: Forces robot to follow a smooth, spline-like velocity profile that naturally decelerates to zero."""
     asset = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
     
     target_time = command[:, 4]
     t_elapsed = env.episode_length_buf * env.step_dt
     t_remaining = torch.clamp(target_time - t_elapsed, min=0.1) 
-    
-    # 1. The Desired Velocity is simply the remaining local distance divided by remaining time
     local_pos_error = command[:, :2]
+    
+    # 1. Calculate Normalized Time (tau) from 0.0 to 1.0
+    tau = torch.clamp(t_elapsed / target_time, min=0.0, max=1.0).unsqueeze(1)
+    
+    # 2. Spline-Like Deceleration Profile
+    # This multiplier stays at 1.0 for the first part of the trip, then smoothly 
+    # tapers the desired velocity down to exactly 0.0 as time expires.
+    decel_profile = torch.clamp((1.0 - tau) * 2.5, max=1.0) 
+    
+    # Apply the smooth deceleration curve to the base required velocity
+    desired_vel_b = (local_pos_error / t_remaining.unsqueeze(1)) * decel_profile
+    
+    # Strictly enforce 0.0 m/s if time has fully expired
     is_active = (t_elapsed < target_time).unsqueeze(1)
+    desired_vel_b = torch.where(is_active, desired_vel_b, torch.zeros_like(local_pos_error))
     
-    desired_vel_b = torch.where(
-        is_active, 
-        local_pos_error / t_remaining.unsqueeze(1), 
-        torch.zeros_like(local_pos_error) # If time is up, desire 0 velocity (park)
-    )
-    
-    # 2. Actual Velocity in the robot's base frame
+    # 3. Calculate Error against Actual Base Velocity
     yaw_q = yaw_quat(asset.data.root_quat_w)
     actual_vel_b = quat_apply_inverse(yaw_q, asset.data.root_lin_vel_w)[:, :2]
     
     vel_error = torch.sum(torch.square(desired_vel_b - actual_vel_b), dim=1)
     return torch.exp(-vel_error / std**2)
 
-# def arrived_on_time_bonus(
-#     env, 
-#     command_name: str, 
-#     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-#     threshold: float = 0.05, # 15cm tolerance
-#     bonus: float = 10.0      # High bonus
-# ) -> torch.Tensor:
-#     """Gives a large bonus if the robot is within threshold at the end of the time limit."""
-    
-#     # Only reward at the very end of the episode (when the timer hits zero)
-#     # We check if the episode is ending based on the episode length buffer
-#     is_at_end = (env.episode_length_buf >= env.max_episode_length - 1)
-    
-#     asset = env.scene[asset_cfg.name]
-#     command = env.command_manager.get_command(command_name)
-    
-#     # Calculate distance error (using the local tracking error from command buffer)
-#     dist_error = torch.norm(command[:, :2], dim=1)
-    
-#     # Check if we are close enough
-#     is_success = (dist_error < threshold)
-    
-#     # Return bonus only if both conditions are met
-#     return is_success * is_at_end * bonus
 
 def arrived_on_time_bonus(
     env, 
@@ -324,212 +375,6 @@ def in_box_bonus(
 
     in_box = (dist_error < threshold) & (yaw_error < yaw_threshold) & height_ok
     return in_box.float()
-
-
-# def gait_symmetry_penalty(env, sensor_cfg: SceneEntityCfg, threshold: float = 1.0) -> torch.Tensor:
-#     """
-#     Penalizes non-trotting gaits by evaluating all four feet.
-#     A true trot requires diagonal pairs to move together, meaning:
-#     1. Front legs alternate
-#     2. Rear legs alternate
-#     3. Same-side legs alternate
-#     """
-#     contact_sensor = env.scene.sensors[sensor_cfg.name]
-    
-#     # Check which feet are touching the ground
-#     contacts = contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :].norm(dim=-1).max(dim=1)[0] > threshold
-    
-#     # WARNING: This assumes your contact indices are: 
-#     # 0 = Front-Left (FL)
-#     # 1 = Front-Right (FR)
-#     # 2 = Rear-Left (RL)
-#     # 3 = Rear-Right (RR)
-#     fl = contacts[:, 0]
-#     fr = contacts[:, 1]
-#     rl = contacts[:, 2]
-#     rr = contacts[:, 3]
-    
-#     # 1. Penalize if front legs do the same thing
-#     front_penalty = (fl == fr).float()
-    
-#     # 2. Penalize if rear legs do the same thing
-#     rear_penalty = (rl == rr).float()
-    
-#     # 3. Penalize if the left-side legs do the same thing (prevents pacing)
-#     side_penalty = (fl == rl).float()
-    
-#     # Sum them all together. A perfect diagonal trot results in a penalty of 0.0
-#     return front_penalty + rear_penalty + side_penalty
-
-# def stride_length_reward(
-#     env,
-#     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
-#     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="LowerLeg.*"),
-#     max_stride: float = 0.30,     # clip: strides longer than this earn no extra (m)
-#     contact_force_n: float = 20.0,  # force below this = foot considered airborne
-#     debug: bool = True,
-# ) -> torch.Tensor:
-#     """Reward horizontal foot displacement over a completed swing (liftoff -> touchdown).
-
-#     Air/contact is determined by thresholding the contact force magnitude, NOT by the
-#     sensor's current_air_time (which never registered lift on this robot).
-#     Fires once per foot at the touchdown step.
-#     """
-#     sensor = env.scene.sensors[sensor_cfg.name]
-#     asset = env.scene[asset_cfg.name]
-
-#     foot_ids = sensor_cfg.body_ids     # feet indices in the CONTACT sensor
-#     body_ids = asset_cfg.body_ids      # feet indices in the ARTICULATION
-#     n_env = env.num_envs
-#     n_feet = len(foot_ids)
-
-#     # --- contact/air detection by force threshold ---
-#     forces = sensor.data.net_forces_w[:, foot_ids].norm(dim=-1)   # (n_env, n_feet)
-#     in_contact = forces > contact_force_n
-#     in_air = ~in_contact                                          # (n_env, n_feet) bool
-
-#     # current horizontal foot positions (world): (n_env, n_feet, 2)
-#     foot_pos_xy = asset.data.body_pos_w[:, body_ids, :2]
-
-#     # --- lazily create persistent buffers on env ---
-#     if not hasattr(env, "_stride_liftoff_xy"):
-#         env._stride_liftoff_xy = foot_pos_xy.clone()
-#         env._stride_was_in_air = torch.zeros((n_env, n_feet), dtype=torch.bool, device=env.device)
-
-#     # feet that just LIFTED OFF this step (were down, now in air): record liftoff xy
-#     just_lifted = in_air & (~env._stride_was_in_air)
-#     env._stride_liftoff_xy = torch.where(
-#         just_lifted.unsqueeze(-1), foot_pos_xy, env._stride_liftoff_xy
-#     )
-
-#     # feet that just TOUCHED DOWN this step (were in air, now down)
-#     just_landed = (~in_air) & env._stride_was_in_air
-
-#     # horizontal distance traveled during the swing
-#     stride = torch.norm(foot_pos_xy - env._stride_liftoff_xy, dim=-1)   # (n_env, n_feet)
-#     stride = torch.clamp(stride, max=max_stride)
-
-#     # reward only on the landing step, summed over feet
-#     reward = torch.sum(stride * just_landed.float(), dim=1)
-
-#     # --- diagnostic (uses the NEW force-based in_air) ---
-#     if debug and env.common_step_counter % 50 == 0:
-#         foot_z = asset.data.body_pos_w[:, body_ids, 2]
-#         print("force[0]  :", [f"{f:.2f}" for f in forces[0].tolist()])
-#         print("in_air[0] :", in_air[0].tolist(),
-#               " n_feet_in_air:", int(in_air[0].sum().item()), "of", n_feet)
-#         print("foot_z[0] :", [f"{z:.3f}" for z in foot_z[0].tolist()])
-#         print("landed[0] :", just_landed[0].tolist(),
-#               " stride[0]:", [f"{s:.3f}" for s in stride[0].tolist()])
-
-#     # update air-state memory for next step
-#     env._stride_was_in_air = in_air
-#     return reward
-
-
-# def trot_gait_phase_reward(
-#     env,
-#     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
-#     period: float = 0.5,                 # full gait cycle duration (s); ~0.4-0.6 typical
-#     diagonal_a: tuple = (0, 3),          # indices (in LowerLeg.* order) of FL, RR
-#     diagonal_b: tuple = (1, 2),          # indices of FR, RL  -- VERIFY THESE
-#     command_name: str = "base_pose",
-# ) -> torch.Tensor:
-#     """Reward matching a trot contact schedule via a phase clock.
-
-#     Diagonal pair A should be airborne in the first half of each cycle,
-#     diagonal pair B airborne in the second half. Rewards feet whose
-#     contact state agrees with the schedule.
-#     """
-#     sensor = env.scene.sensors[sensor_cfg.name]
-#     foot_ids = sensor_cfg.body_ids
-
-#     # is each foot in contact this step? use air time: in contact => current_air_time == 0
-#     cur_air = sensor.data.current_air_time[:, foot_ids]       # (n_env, n_feet)
-#     in_contact = (cur_air <= 1e-4).float()                    # 1 = stance, 0 = swing
-
-#     # phase clock in [0,1)
-#     t_elapsed = env.episode_length_buf * env.step_dt
-#     phase = (t_elapsed / period) % 1.0                        # (n_env,)
-
-#     # first half: pair A should SWING (in_contact ~ 0), pair B should STANCE (~1)
-#     # second half: reversed
-#     a_should_stance = (phase >= 0.5).float()                  # 1 in 2nd half
-#     b_should_stance = (phase < 0.5).float()                   # 1 in 1st half
-
-#     a_idx = list(diagonal_a)
-#     b_idx = list(diagonal_b)
-
-#     # reward = agreement between desired stance and actual contact, per foot
-#     # agreement = 1 - |desired - actual|
-#     a_actual = in_contact[:, a_idx]                           # (n_env, 2)
-#     b_actual = in_contact[:, b_idx]
-
-#     a_match = 1.0 - torch.abs(a_should_stance.unsqueeze(1) - a_actual)
-#     b_match = 1.0 - torch.abs(b_should_stance.unsqueeze(1) - b_actual)
-
-#     # average agreement across all four feet -> [0,1]
-#     reward = (a_match.sum(dim=1) + b_match.sum(dim=1)) / 4.0
-
-#     # optional: only reward the gait while the robot is actually moving toward target
-#     command = env.command_manager.get_command(command_name)
-#     dist = torch.norm(command[:, :2], dim=1)
-#     moving = (dist > 0.10).float()          # don't enforce trot once parked in the box
-#     return reward * moving
-
-# def feet_air_time_force(
-#     env,
-#     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="LowerLeg.*"),
-#     command_name: str = "base_pose",
-#     threshold: float = 0.20,        # target swing duration (s); set BELOW median swing
-#     contact_force_n: float = 22.0,  # force below this = airborne
-# ) -> torch.Tensor:
-#     """feet_air_time computed from a force threshold instead of the sensor's own
-#     contact state (which never registered lift on this robot).
-
-#     Rewards each completed swing by (air_time - threshold), counted at touchdown.
-#     Only active while the robot is still moving toward the target.
-#     """
-#     sensor = env.scene.sensors[sensor_cfg.name]
-#     foot_ids = sensor_cfg.body_ids
-#     n_env = env.num_envs
-#     n_feet = len(foot_ids)
-
-#     forces = sensor.data.net_forces_w[:, foot_ids].norm(dim=-1)
-#     in_contact = forces > contact_force_n
-#     in_air = ~in_contact
-
-#     # persistent air-time accumulator
-#     if not hasattr(env, "_fat_air_time"):
-#         env._fat_air_time = torch.zeros((n_env, n_feet), device=env.device)
-#         env._fat_was_in_air = torch.zeros((n_env, n_feet), dtype=torch.bool, device=env.device)
-
-#     # accumulate air time while airborne, reset to 0 on contact
-#     env._fat_air_time = torch.where(
-#         in_air,
-#         env._fat_air_time + env.step_dt,
-#         torch.zeros_like(env._fat_air_time),
-#     )
-
-#     # touchdown this step = was in air, now in contact
-#     just_landed = in_contact & env._fat_was_in_air
-
-#     # air time of the swing that just completed (value BEFORE it was zeroed above:
-#     # capture it from the previous step's accumulator)
-#     completed_air = torch.where(just_landed, env._prev_fat_air_time, torch.zeros_like(env._fat_air_time)) \
-#         if hasattr(env, "_prev_fat_air_time") else torch.zeros_like(env._fat_air_time)
-
-#     reward = torch.sum((completed_air - threshold) * just_landed.float(), dim=1)
-
-#     # gate: only reward stepping while moving toward target (not while parked)
-#     command = env.command_manager.get_command(command_name)
-#     dist = torch.norm(command[:, :2], dim=1)
-#     reward = reward * (dist > 0.10).float()
-
-#     # save state for next step
-#     env._prev_fat_air_time = env._fat_air_time.clone()
-#     env._fat_was_in_air = in_air
-#     return reward
 
 
 
@@ -668,4 +513,23 @@ def joint_velocity_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) ->
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.linalg.norm((asset.data.joint_vel), dim=1)
 
-
+def terminal_velocity_penalty(
+    env: ManagerBasedRLEnv, 
+    command_name: str, 
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Heavily penalize base velocity when the target time has expired."""
+    asset = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    
+    target_time = command[:, 4]
+    t_elapsed = env.episode_length_buf * env.step_dt
+    
+    # Check if time is up (or very close to it, e.g., within 0.1s)
+    is_time_up = (t_elapsed >= target_time - 0.1).float()
+    
+    # Get the base planar velocity
+    actual_vel = torch.norm(asset.data.root_lin_vel_w[:, :2], dim=1)
+    
+    # Penalize velocity only when time is up
+    return actual_vel * is_time_up

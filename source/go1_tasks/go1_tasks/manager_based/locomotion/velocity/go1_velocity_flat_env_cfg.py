@@ -346,6 +346,7 @@ class Go1VelocityFlatEnvCfg_PLAY(Go1VelocityFlatEnvCfg):
         # make a smaller scene for play
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
+        self.episode_length_s = 6.0
 
         self.scene.terrain.terrain_type = "plane"
         self.scene.terrain.terrain_generator = None   # drop the rough-terrain generator

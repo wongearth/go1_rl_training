@@ -440,14 +440,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         write_header = False
     results_file = open(args_cli.results_csv, "a" if args_cli.append else "w", newline="")
     results_writer = csv.writer(results_file)
+    # if write_header:
+    #     results_writer.writerow(["cmd_x", "cmd_y", "cmd_yaw", "target_time",
+    #                              "err_x", "err_y", "err_yaw", "vel_x", "vel_y", "vel_yaw"])
     if write_header:
         results_writer.writerow(["cmd_x", "cmd_y", "cmd_yaw", "target_time",
-                                 "err_x", "err_y", "err_yaw", "vel_x", "vel_y", "vel_yaw"])
+                                 "err_x", "err_y", "err_yaw", "vel_x", "vel_y", "vel_yaw",
+                                 "err_x_1s", "err_y_1s", "err_yaw_1s", "vel_x_1s", "vel_y_1s", "vel_yaw_1s"])
+
+
 
     # ---------- LATCH VARIABLES ----------
     captured_at_target = False
     tgt_err_x = tgt_err_y = tgt_err_yaw = 0.0
     tgt_vel_x = tgt_vel_y = tgt_vel_yaw = 0.0
+
+    captured_at_1s = False
+    err_x_1s = err_y_1s = err_yaw_1s = 0.0
+    vel_x_1s = vel_y_1s = vel_yaw_1s = 0.0
 
 
     # reset environment
@@ -561,6 +571,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 tgt_vel_y = robot_asset.data.root_lin_vel_b[0, 1].item()
                 tgt_vel_yaw = robot_asset.data.root_ang_vel_b[0, 2].item()
                 captured_at_target = True
+
+            if (not captured_at_1s) and (current_episode_time >= target_time + 1.0):
+                err_x_1s = cx
+                err_y_1s = cy
+                err_yaw_1s = cyaw
+                vel_x_1s = robot_asset.data.root_lin_vel_b[0, 0].item()
+                vel_y_1s = robot_asset.data.root_lin_vel_b[0, 1].item()
+                vel_yaw_1s = robot_asset.data.root_ang_vel_b[0, 2].item()
+                captured_at_1s = True
 
 
 
@@ -715,11 +734,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 results_writer.writerow([
                     f"{cmd_x:.6f}", f"{cmd_y:.6f}", f"{cmd_yaw:.6f}", f"{cmd_T:.6f}",
                     f"{tgt_err_x:.6f}", f"{tgt_err_y:.6f}", f"{tgt_err_yaw:.6f}",
-                    f"{tgt_vel_x:.6f}", f"{tgt_vel_y:.6f}", f"{tgt_vel_yaw:.6f}"
+                    f"{tgt_vel_x:.6f}", f"{tgt_vel_y:.6f}", f"{tgt_vel_yaw:.6f}",
+                    f"{err_x_1s:.6f}", f"{err_y_1s:.6f}", f"{err_yaw_1s:.6f}",
+                    f"{vel_x_1s:.6f}", f"{vel_y_1s:.6f}", f"{vel_yaw_1s:.6f}"
                 ])
                 results_file.flush()
                 captured_at_target = False  # Reset for the next run
-
+                captured_at_1s = False
 
                 if len(history_time) > 1:
                     ax1.clear()

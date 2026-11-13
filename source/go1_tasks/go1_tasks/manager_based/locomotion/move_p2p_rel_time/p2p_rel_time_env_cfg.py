@@ -146,10 +146,21 @@ class Go1ObservationsCfg:
             func=mdp.projected_gravity, 
             noise=Unoise(n_min=-0.05, n_max=0.05))
         
-        # UPDATE: Observe the generated pose command instead of velocity
+        # pose_commands = ObsTerm(
+        #     func=mdp.generated_commands, 
+        #     params={"command_name": "base_pose"})
+
+        # For IEEE ACCESS R1
+        # UPDATE: Observe the generated pose command with built-in accumulating drift
         pose_commands = ObsTerm(
-            func=mdp.generated_commands, 
-            params={"command_name": "base_pose"})
+            func=custom_mdp.pose_command_with_drift, 
+            params={
+                "command_name": "base_pose",
+                "drift_std_xy": 0.01,
+                "drift_std_yaw": 0.009
+            }
+        )
+
         
         joint_pos = ObsTerm(
             func=mdp.joint_pos_rel, 
@@ -305,7 +316,8 @@ class Go1RewardsCfg:
 
     # 1. Timed Trajectory Tracking (Replaces standard track_progress)
     track_timed_trajectory = RewTerm(
-        func=custom_mdp.track_timed_trajectory_local_exp,
+        # func=custom_mdp.track_timed_trajectory_local_exp_v2,
+        func=custom_mdp.track_spline_trajectory_local_exp_v3,
         weight=4.0, 
         params={"command_name": "base_pose",
             "std": 0.5, 
@@ -313,15 +325,36 @@ class Go1RewardsCfg:
     )
 
 
-    # 2. The Strict Parker (Kicks in hard when time is up and desired_vel drops to 0)
-    rel_pos_tracking = RewTerm(
+    # # 2. The Strict Parker (Kicks in hard when time is up and desired_vel drops to 0)
+    # rel_pos_tracking = RewTerm(
+    #     func=custom_mdp.park_and_face_target_exp,
+    #     # weight=2.0, 
+    #     weight=2.0, 
+    #     params={"command_name": "base_pose", 
+    #             # "pos_std": 0.25, 
+    #             "pos_std": 0.05, 
+    #             "yaw_std": 0.15}, 
+    # )
+
+    # 1. The Wide Net (Tolerates the 3-4cm sensor drift)
+    rel_pos_tracking_wide = RewTerm(
         func=custom_mdp.park_and_face_target_exp,
-        # weight=2.0, 
         weight=2.0, 
         params={"command_name": "base_pose", 
-                "pos_std": 0.25, 
+                "pos_std": 0.10, # 10cm width catches the drifting observation
                 "yaw_std": 0.15}, 
     )
+
+    # 2. The Bullseye (Forces sub-centimeter physical accuracy)
+    rel_pos_tracking_strict = RewTerm(
+        func=custom_mdp.park_and_face_target_exp,
+        weight=3.0, 
+        params={"command_name": "base_pose", 
+                "pos_std": 0.02, # Ultra-strict 2cm width
+                "yaw_std": 0.05}, 
+    )
+
+
 
     # Reward for facing the exact target angle
     track_yaw = RewTerm(
@@ -334,6 +367,15 @@ class Go1RewardsCfg:
         }
     )
 
+    # -- Added for IEEE ACCESS R1
+    zero_vel_arrival = RewTerm(
+        func=custom_mdp.terminal_velocity_penalty, # Or wherever your track_heading_exp is located
+        weight=-5.0,  
+        params={
+            "command_name": "base_pose", 
+            "asset_cfg": SceneEntityCfg("robot")
+        }
+    )
 
 
     # # 1. Timed Trajectory Tracking (Replaces standard track_progress)
@@ -373,7 +415,8 @@ class Go1RewardsCfg:
     # The Statue Penalty: Forces the robot to freeze solid when it reaches the goal
     stop_jitter = RewTerm(
         func=custom_mdp.stand_still_when_arrived,
-        weight=-0.005, # Very heavy penalty for vibrating
+        # weight=-0.005, # Very heavy penalty for vibrating
+        weight=-0.05, # Very heavy penalty for vibrating
         params={"command_name": "base_pose", "asset_cfg": SceneEntityCfg("robot")}
     )
 
@@ -618,7 +661,7 @@ class Go1P2PRelTimeEnvCfg_PLAY(Go1P2PRelTimeEnvCfg):
         # 2. BASIC PLAYBACK SETTINGS
         # ==========================================================
         self.scene.num_envs = 1
-        self.episode_length_s = 4.0 
+        self.episode_length_s = 5.0 
         self.observations.policy.enable_corruption = False
 
         # ==========================================================

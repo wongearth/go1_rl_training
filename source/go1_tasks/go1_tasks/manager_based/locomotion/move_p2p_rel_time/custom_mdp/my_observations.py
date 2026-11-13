@@ -3,6 +3,7 @@ from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import euler_xyz_from_quat, quat_apply_inverse, wrap_to_pi, yaw_quat
 from .my_utils import _ensure_relpose_buffers
+import math
 
 def rel_pose_command(env: ManagerBasedRLEnv) -> torch.Tensor:
     _ensure_relpose_buffers(env)
@@ -45,3 +46,41 @@ def time_remaining_normalized(env: ManagerBasedRLEnv, command_name: str) -> torc
     
     # Must return a 2D tensor [num_envs, 1] for observations
     return t_rem.unsqueeze(1)
+
+def pose_command_with_drift(
+    env: ManagerBasedRLEnv, 
+    command_name: str,
+    # drift_std_xy: float = 0.01,
+    # drift_std_yaw: float = 0.009
+    # # for k=2
+    # drift_std_xy: float = 0.02,
+    # drift_std_yaw: float = 0.018
+    # for k=3
+    drift_std_xy: float = 0.03,
+    drift_std_yaw: float = 0.027
+) -> torch.Tensor:
+    """Fetches the pose command and applies an accumulating random-walk drift."""
+    # 1. Get the clean 5D command: [dx, dy, dz, dyaw, time]
+    command = env.command_manager.get_command(command_name)
+    
+    # 2. Initialize a persistent drift buffer on the environment (runs once)
+    if not hasattr(env, "_obs_drift_bias"):
+        env._obs_drift_bias = torch.zeros((env.num_envs, 3), device=env.device)
+        # Precompute scales: std * sqrt(dt)
+        scales = [drift_std_xy, drift_std_xy, drift_std_yaw]
+        env._obs_drift_scales = torch.tensor(scales, device=env.device) * math.sqrt(env.step_dt)
+        
+    # 3. Reset drift to zero for environments that just restarted
+    resets = (env.episode_length_buf == 0)
+    env._obs_drift_bias[resets] = 0.0
+    
+    # 4. Accumulate the random walk
+    step_noise = torch.randn_like(env._obs_drift_bias) * env._obs_drift_scales
+    env._obs_drift_bias += step_noise
+    
+    # 5. Apply drift to the X, Y, and Yaw channels of the command
+    noisy_command = command.clone()
+    noisy_command[:, 0:2] += env._obs_drift_bias[:, 0:2] # Corrupt dx, dy
+    noisy_command[:, 3] += env._obs_drift_bias[:, 2]     # Corrupt dyaw
+    
+    return noisy_command
